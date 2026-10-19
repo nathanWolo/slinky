@@ -17,10 +17,10 @@ native_run="${NATIVE_RUN:-/home/nathan/slinky-serve/az-modes-M-s0}"
 [ -f "$native_run/params.npz" ] && [ -f "$native_run/config.json" ] \
     || { echo "no az_modes run dir at $native_run (set NATIVE_RUN)" >&2; exit 1; }
 
+target="${CARGO_TARGET_DIR:-/dev/shm/naz-target-lambda}"
 # shellcheck disable=SC1091
 source "$root/native/.cargo-env.sh"  # rustup's cargo (it also sets a target dir: ours wins)
-export PATH="$HOME/.local/lambda-tools/bin:$PATH"
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/dev/shm/naz-target-lambda}"
+export PATH="$HOME/.local/lambda-tools/bin:$PATH" CARGO_TARGET_DIR="$target"
 # unwind: a panic in one request answers the safe move instead of killing the process
 export CARGO_PROFILE_RELEASE_PANIC=unwind
 
