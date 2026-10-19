@@ -64,7 +64,8 @@ pub enum MoveBudget {
     /// faithful ladder agent.
     Simulations(usize),
     /// Search until `ms` milliseconds after the request's arrival, at most `max_simulations`
-    /// (at least one simulation always runs). Not deterministic.
+    /// (at least one simulation always runs, unless the move is decided at once:
+    /// [`crate::StopReason::Decided`], 0 simulations on a forced move). Not deterministic.
     Time {
         /// Milliseconds from the arrival to the end of the search.
         ms: u64,

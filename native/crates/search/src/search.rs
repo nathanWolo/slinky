@@ -180,7 +180,8 @@ pub struct Budget {
     /// `min(max_depth, simulations)` as in Python.
     pub simulations: usize,
     /// Stop before starting a simulation once this instant has passed (at least one simulation
-    /// always runs). `None`, the faithful mode, runs exactly `simulations`.
+    /// always runs, unless the move is decided at once: [`StopReason::Decided`], with 0
+    /// simulations on a forced move). `None`, the faithful mode, runs exactly `simulations`.
     pub deadline: Option<Instant>,
 }
 
@@ -376,8 +377,10 @@ impl Search {
     }
 
     /// Cap the tree at `bytes`: a search stops before a simulation once it holds
-    /// `bytes / node_bytes(N)` nodes (at least one simulation always runs). The 256-simulation
-    /// faithful search needs about 0.7 MB in a 4-seat game, so the default never binds it.
+    /// `bytes / node_bytes(N)` nodes (at least one simulation always runs, unless the move is
+    /// decided at once: [`StopReason::Decided`], 0 simulations on a forced move). The
+    /// 256-simulation faithful search needs about 0.7 MB in a 4-seat game, so the default never
+    /// binds it.
     pub fn set_memory_limit(&mut self, bytes: usize) {
         self.memory_limit = bytes;
     }
@@ -519,7 +522,9 @@ impl Search {
         let joints = NUM_ACTIONS.pow(n as u32);
         let mut sims_cap = budget.simulations.min(MAX_SIMULATIONS);
         if budget.deadline.is_some() {
-            sims_cap = sims_cap.max(1); // at least one simulation always runs
+            // At least one simulation runs, unless the move is decided at once
+            // (`StopReason::Decided`).
+            sims_cap = sims_cap.max(1);
         }
         let max_depth = settings.max_depth.min(sims_cap);
         let per_node = node_bytes(n);

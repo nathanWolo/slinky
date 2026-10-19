@@ -37,8 +37,8 @@ the M network), each move is the faithful decoupled-PUCT search of the Python ag
 | `BUDGET_MS` | stop searching this many ms after the request reached the handler (not the faithful mode: the simulation count depends on the CPU) | off |
 | `THREADS` | root-parallel search trees, one per vCPU (`1` is the plain search) | 1 |
 | `TIE_SEED` | one fixed tie-break seed for every move (tests) | derived, see below |
-| `MEMORY_LIMIT_MB` | cap on one search tree (the search stops early when it is reached) | 256 |
-| `EARLY_STOP` | `0`: always run the whole simulation count; `1`: stop once the leading move cannot be overtaken by the simulations left (the move is the same) | `1` |
+| `MEMORY_LIMIT_MB` | cap on one search tree (the search stops early when it is reached). With `REUSE` a snake holds up to 8 trees (2 x `GAME_TREES`: the current and the previous tree of each of 4 games), see Memory | 256 |
+| `EARLY_STOP` | `0`: always run the whole simulation count; `1`: stop once the leading move cannot be overtaken by the simulations left (the move is the same). A `BUDGET_MS` snake stops early only with `REUSE=0`, see Early stop and reuse | `1` |
 | `REUSE` | `0`: forget each search; `1`: keep each game's last tree (the 4 most recent games) and reuse its network evaluations (bit-identical moves) | `1` |
 | `DEADLINE_MARGIN_MS` | time kept for the network and Lambda's overhead: every search stops at `game.timeout` less this (see Deadline) | 150 |
 | `DEBUG_PANIC` | `search:<game id>` or `handler:<game id>`: panic on that game's `/move` (tests only) | off |
@@ -54,10 +54,33 @@ Every search stops at the request's deadline, whatever its settings: `game.timeo
 when the request has none, or one that is not a positive number) less `DEADLINE_MARGIN_MS`,
 counted from the request's arrival at the handler, and never after the invocation's own
 deadline less the margin. When the deadline cuts a search, the move is the best of the
-simulations run so far (at least one always runs). `BUDGET_MS` past the deadline is cut to it.
-A fixed `SIMULATIONS` search that ends before its deadline is unchanged (the 461 Python goldens
-still agree). Each move's log line has `deadline_ms` (arrival to deadline) and `cut` (the
-deadline or the memory cap stopped the search early).
+simulations run so far (at least one always runs, unless the move is decided at once:
+`StopReason::Decided`, 0 simulations on a forced move). `BUDGET_MS` past the deadline is cut to
+it. A fixed `SIMULATIONS` search that ends before its deadline is unchanged (the 461 Python
+goldens still agree). Each move's log line has `deadline_ms` (arrival to deadline) and `cut`
+(a one-tree search was stopped by the deadline or the memory cap; a search that ended because
+its move was decided or its tree solved is not cut).
+
+### Early stop and reuse
+
+Two speed-ups that never change a move; switch them off with `EARLY_STOP=0` and `REUSE=0`. With
+the early stop a search ends once its move cannot change: for a `SIMULATIONS` snake (`/az-256`)
+that makes `sims` below the count normal, and `sims` 0 on a forced move (one legal move). A
+`BUDGET_MS` snake (`/az-t200`) counts to its cap (16,384 simulations), where the early stop could
+only end forced moves, and a forced move's tree is the one the next move reuses most (47% of its
+nodes in a duel and 29% in a 4-player game, against 33% and 16% after an ordinary move). So a
+`BUDGET_MS` snake searches forced moves to its deadline when `REUSE` is on, and stops them at
+once (`sims` 0) only with `REUSE=0`. With `REUSE` the engine keeps the last tree of each of the 4
+most recent games, and the next move copies the network evaluation of every node it shares with
+that tree (`reused` in the log line). Both apply to a one-tree search (`THREADS=1`).
+
+### Memory
+
+`MEMORY_LIMIT_MB` caps one search tree. With `REUSE` each of a snake's 4 kept games holds its
+current and its previous tree, so a snake holds up to 8 trees (`2 x GAME_TREES`). At the
+16,384-simulation cap of `/az-t200` that is an estimated worst case of about 360 MB (8 x the
+45 MB resident measured for one such tree), which fits the 1,769 MB function. Lower the limit
+if a snake is given a much larger cap or more time.
 
 ### Seed policy
 
@@ -126,8 +149,8 @@ binary 2.18 MB, zip 2.28 MB; x86 zip 2.38 MB. Built and checked as ELF aarch64 a
 Optional speed-up, x86 only: `RUSTFLAGS="-C target-cpu=x86-64-v3"` (AVX2) makes the move about 20 to
 25% faster (measured on the PC: standard 4p 14.7 ms against 18.9 ms in the same session) with the
 same moves (461/461 Python-golden requests agree). Lambda x86 hosts all have AVX2, but the
-function then fails with SIGILL on a CPU without it. An arm64 `target-cpu=neoverse-n1` build was
-not tried.
+function then fails with SIGILL on a CPU without it. The arm64 build is already a
+`target-cpu=neoverse-n1` one: cargo-lambda passes `-C target-cpu=neoverse-n1` for `--arm64`.
 
 ## Tests and local run
 

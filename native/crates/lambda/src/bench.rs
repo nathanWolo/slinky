@@ -26,7 +26,8 @@
 //!   reaches with and without the reuse of the last tree, on `turns` turns (default 10; 0 skips
 //!   it) of games where seat 0 plays the searched move, and with the reuse on the int8
 //!   network. With a time budget the early stop only ends forced moves (the cap is out of
-//!   reach), so these simulations are what speed buys.
+//!   reach), and the engine skips it when the reuse is on, so these simulations are what speed
+//!   buys.
 //!
 //! It stops early, with what it has, 300 ms before the invocation's deadline: give the
 //! function a longer timeout for the run (about 50 s on the dev box's Xeon with the defaults;

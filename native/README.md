@@ -92,10 +92,18 @@ Each layer is held to the strictest standard that is achievable:
 ## Measured parity (final verification, 2026-10-15)
 
 All golden vectors were regenerated from an empty `/dev/shm/naz-golden` (15 generator runs, all
-succeeded). `cargo test --workspace --release` passed 140 tests, with 0 failed, 0 ignored and no
-skips. With `NAZ_GOLDEN` pointing at an empty directory, all 140 still pass and the golden parts
-print SKIP. Clippy (`--all-targets -D warnings`), `cargo fmt --check` and rustdoc with
-`-D warnings` are clean.
+succeeded). `cargo test --workspace --release` passed 336 tests, with 0 failed, 0 ignored and 0
+SKIP lines (run with `-- --nocapture`, which is what prints them). With `NAZ_GOLDEN` pointing at an
+empty directory, all 336 still pass and the golden parts print SKIP. Clippy (`--all-targets -D
+warnings`, for x86-64 and aarch64), `cargo fmt --check` and rustdoc with `-D warnings` are clean.
+(The first verification, on 2026-10-15, counted 140 tests; the count was re-measured on 2026-10-18
+with the early stop, the tree reuse and the structured first layer merged.)
+
+The search now feeds the network structured boards (`Network::forward_boards_into`), whose
+outputs differ from the dense path's by typically ~2e-7 and at most a few 1e-6 (the same order as
+the Rust-vs-XLA difference), so a rare near-tie can flip (about 1 search in 15,000 to 55,000).
+The two rows below that run the Rust network were re-measured on the structured path on
+2026-10-18 (marked there); the tables are otherwise as of 2026-10-15.
 
 | part | cases | result |
 |---|---|---|
@@ -109,8 +117,8 @@ print SKIP. Clippy (`--all-targets -D warnings`), `cargo fmt --check` and rustdo
 | search: mechanics (uniform priors, zero values), 20 to 256 simulations, several constants | 2,980 searches | bit-exact (visits, q, policy, value, priors, moves, node count, depth) |
 | search: real agent with Python's network outputs replayed | 2,300 searches | bit-exact |
 | search: adversarial (crafted, random play, other constants) | 680 + 840 + 340 searches | bit-exact, root priors included |
-| search: real agent with the Rust network, 256 simulations | 2,300 positions (golden seeds) | move agrees 100%. Visits equal for seat 0 in 99.91% of positions and for all seats in 99.87% |
-| agent end to end (`Agent::play` on API requests) | 210 golden requests + 466 ladder-shaped requests | move agrees 100%, seat-0 visits equal 100% |
+| search: real agent with the Rust network, 256 simulations | 2,300 positions (golden seeds) | move agrees 100%. Visits equal for seat 0 in 99.91% of positions and for all seats in 99.87%. **Re-measured on the structured path (2026-10-18): moves 2,300/2,300, seat-0 visits equal 99.87% (3 differ, against 2 on the dense path), all seats 99.83%** |
+| agent end to end (`Agent::play` on API requests) | 210 golden requests + 466 ladder-shaped requests | move agrees 100%, seat-0 visits equal 100%. **Re-measured on the structured path (2026-10-18): e2e 210/210; Lambda engine against Python, 461/461 ladder-shaped requests** |
 
 ### Fresh positions (new seeds, not used during development)
 
@@ -180,8 +188,10 @@ Agents:
 * `random_legal`;
 * `az_modes:<run dir>` with `:simulations=N` (default 256), or `:time_ms=T[:max_simulations=N]`
   (not deterministic), and optionally `:threads=K`, `:early_stop=1` and `:reuse=1` (the
-  deployed engine's speed-ups that keep the moves) and `:int8=1` (the int8 network,
-  `Network::quantize_int8`). A bare run dir also works.
+  deployed engine's speed-ups that keep the moves; the engine itself does not stop a
+  time-budget search early when the reuse is on) and `:int8=1` (the int8 network,
+  `Network::quantize_int8`: off in every serving path, changes the outputs, strength
+  untested). A bare run dir also works.
 
 Options:
 

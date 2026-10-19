@@ -941,15 +941,21 @@ impl Network {
             + 1
     }
 
-    /// **Off by default; changes the outputs.** Run every convolution after the first and the
-    /// dense hidden layer in int8 (see the `quant` module): weights rounded with one scale per
-    /// output channel, activations with one scale per board and layer, sums exact in `i32`. On
-    /// CPUs with int8 dot-product instructions (aarch64 `dotprod`, x86-64 AVX-VNNI) a row
-    /// takes about two thirds of the `f32` time or less; the outputs move by about 5e-3 (at
-    /// most about 5e-2). Elsewhere the plain Rust kernel is much slower than `f32`. Every kernel
-    /// gives the same bits. `on = false` restores `f32`. An error (nothing changed) when the
-    /// shapes have no int8 kernel: fewer than two convolutions, or channel counts or a hidden
-    /// width that are not multiples of 16.
+    /// **Off by default; changes the outputs; strength untested.** Run every convolution after
+    /// the first and the dense hidden layer in int8 (see the `quant` module): weights rounded
+    /// with one scale per output channel, activations with one scale per board and layer, sums
+    /// exact in `i32`. On the deployed M net the outputs move by a mean |dlogit| of 0.02 to 0.06
+    /// (at most about 0.7) and a mean |dvalue| of 0.007 to 0.022 with a consistent positive
+    /// bias, and the greedy (argmax) move flips on 2.6% to 4.9% of the nodes. Strength is
+    /// untested: 0 +/- 49 Elo at equal 256 simulations (192 duel games). Speed: on CPUs with
+    /// int8 dot-product instructions (aarch64 `dotprod`, x86-64 AVX-VNNI) a row should take
+    /// less than the `f32` one. Measured: Graviton2's `sdot` takes 33-35 us against 39-42 us
+    /// for structured `f32` (1.17 times faster), with the same error statistics as the plain
+    /// kernel; AVX-VNNI has never run on a test machine. Elsewhere the plain Rust kernel is much
+    /// slower than `f32`: about 3 times on Graviton2, about 10 times on x86-64 without
+    /// AVX-VNNI. The kernels are meant to give the same bits. `on = false` restores `f32`. An
+    /// error (nothing changed) when the shapes have no int8 kernel: fewer than two convolutions,
+    /// or channel counts or a hidden width that are not multiples of 16.
     pub fn quantize_int8(&mut self, on: bool) -> Result<(), NetError> {
         if !on {
             if self.int8.take().is_some() {
@@ -1179,8 +1185,9 @@ impl Network {
     }
 
     /// [`Network::forward_into`] on structured boards ([`BoardInput`], one per row): the same
-    /// outputs up to float rounding (the whole-board planes are added in another order), without
-    /// building or scanning the dense 21x21x13 window.
+    /// outputs up to float rounding (the whole-board planes are added in another order:
+    /// typically ~2e-7, at most a few 1e-6, the same order as the Rust-vs-XLA difference; it
+    /// can flip a rare near-tie), without building or scanning the dense 21x21x13 window.
     pub fn forward_boards_into(
         &self,
         scratch: &mut Scratch,
