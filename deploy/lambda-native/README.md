@@ -47,14 +47,29 @@ shell to the function's environment like `THREADS`. The engine accepts only `0` 
 
 Either one can be set alone. A deployed value persists across later deploys (the script keeps the
 deployed environment and only overwrites the variables set in the shell), so turning them back on
-needs an explicit `=1`; a plain `deploy.sh` leaves a `0` in place. `SKIP_BUILD=1` deploys the
-`dist/native.zip` that is already there. The current values:
+needs an explicit `=1`; a plain `deploy.sh` leaves a `0` in place. `SKIP_BUILD=1` skips the
+build, but `deploy.sh` still uploads `dist/native.zip` as the function's code: check its date and
+`sha256sum` first, because whatever is there replaces the live code. The current values:
 `aws --region us-east-2 lambda get-function-configuration --function-name slinky-native --query Environment.Variables`.
 A configuration change starts fresh containers, so do it while no games are being played.
 
+The switch covers the early stop and the reuse only. The structured first layer has no switch
+(the search always calls it, and it can flip a rare near-tie); only rolling back to an older zip
+removes it. int8 and bfloat16 are not wired in at all. To deploy a new build with both speed-ups
+off from the start, leave out SKIP_BUILD:
+`EARLY_STOP=0 REUSE=0 AWS_PROFILE=slinky deploy/lambda-native/deploy.sh`. The log lines then show
+`sims` 256 and `reused` 0.
+
+Before the first deploy of a new build, save the code that is live now (the link from
+`get-function` works for about 10 minutes), so there is something to roll back to:
+
+    mkdir -p deploy/lambda-native/dist
+    curl -sS -o deploy/lambda-native/dist/native-live.zip "$(aws --region us-east-2 lambda get-function --function-name slinky-native --query Code.Location --output text)"
+    sha256sum deploy/lambda-native/dist/native-live.zip
+
 To roll back to a previous build, keep its zip (`build.sh` overwrites `dist/native.zip` and prints
-the zip's sha256; copy the live one aside before the next build), put it back as
-`dist/native.zip` and deploy with `SKIP_BUILD=1`:
+the zip's sha256; save the live one aside before the next build, as above), put it back as
+`dist/native.zip` and deploy with `SKIP_BUILD=1`. For the code saved above, `<previous>` is `live`:
 
     cp deploy/lambda-native/dist/native-<previous>.zip deploy/lambda-native/dist/native.zip
     SKIP_BUILD=1 AWS_PROFILE=slinky deploy/lambda-native/deploy.sh
