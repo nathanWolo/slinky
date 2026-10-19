@@ -16,6 +16,15 @@ use slinky_net::{BoardInput, NUM_ACTIONS, Network, Scratch};
 use slinky_obs::{Encoder, NUM_FEATURES, OBS_LEN, SparseObs};
 use slinky_rules::{GameConfig, GameState, MAX_SNAKES};
 
+// The net crate names the three whole-board channels itself (`network.rs`), and the observation
+// builder numbers all of them (`slinky_obs::ch`): the structured first layer relies on both
+// agreeing, which golden-free test runs would not otherwise check.
+const _: () = assert!(
+    slinky_net::CH_ON_BOARD == slinky_obs::ch::ON_BOARD
+        && slinky_net::CH_OWN_HEALTH == slinky_obs::ch::OWN_HEALTH
+        && slinky_net::CH_OWN_LENGTH == slinky_obs::ch::OWN_LENGTH
+);
+
 /// Where a node's PUCT priors come from.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Prior {
@@ -89,8 +98,9 @@ impl Evaluator for UniformEvaluator {
 }
 
 /// The network evaluator (`az_modes.make_evaluator`): the asked seats' boards and feature rows
-/// in one batch through [`Network::forward_into`]. Holds its work buffers, so evaluating
-/// allocates nothing.
+/// in one batch through [`Network::forward_boards_into`], on structured boards
+/// ([`SparseObs`]) rather than the dense window of [`Network::forward_into`]. Holds its work
+/// buffers, so evaluating allocates nothing.
 pub struct NetEvaluator<'a> {
     net: &'a Network,
     encoder: Encoder,
