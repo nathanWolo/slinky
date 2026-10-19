@@ -3,7 +3,9 @@
 //! Ports `az_modes.network` (`baselines/az_modes.py:198`), `unified.torso`/`conv_features`
 //! (`src/slinky/unified.py:431-470`) and the `params.npz` / `config.json` loaders
 //! (`unified.py:666-712`); see `native-az/SPEC.md` sections 1, 2 and 8. No JAX, no BLAS, no
-//! unsafe, no panics on bad files or inputs (every failure is a [`NetError`]).
+//! panics on bad files or inputs (every failure is a [`NetError`]). `unsafe` is confined to the
+//! SIMD lanes (`simd.rs`) and the int8 dot-product kernels (`quant.rs`: aarch64 `sdot`, x86-64
+//! AVX-VNNI).
 //!
 //! # Public API
 //!

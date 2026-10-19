@@ -97,7 +97,7 @@
 //! * [`Search`]: `with_memory_limit(bytes)` / `set_memory_limit` / `memory_limit()` (default
 //!   [`DEFAULT_MEMORY_LIMIT`], 256 MiB per workspace; the search stops before a simulation once
 //!   the tree is full), `stats() -> `[`SearchStats`] (simulations, nodes, depth, elapsed,
-//!   [`StopReason`] `Simulations | Deadline | MemoryLimit | Solved`, `tree_bytes`,
+//!   [`StopReason`] `Simulations | Deadline | MemoryLimit | Solved | Decided`, `tree_bytes`,
 //!   `allocated_bytes`),
 //!   `subtree_simulations(&moves)` (the part of the tree under a root child). [`node_bytes`]`(N)`
 //!   is the tree memory per node; [`MAX_SIMULATIONS`] (2^24) caps any budget.
@@ -124,16 +124,19 @@
 //!   could do better, at the price of determinism and a lock-free tree; its gain is bounded by
 //!   the `1x1024` to `1x4096` gap above, and a 300 ms single-core search already reaches 4k to
 //!   7k simulations.
-//! * **No tree reuse between moves.** Only the subtree under the joint move actually played can
-//!   be kept: on average 49% of a 4096-simulation tree lies under the child of the searched
-//!   moves of *all* seats (33% in 4-seat standard, 37% royale, 56% duel, 63% constrictor), an
-//!   upper bound since real opponents often play otherwise. The next request matches that child
-//!   only if no food spawned (the search does not model spawns), the royale zone did not shrink
-//!   onto unknown sides, and the seats are mapped back (the request puts living snakes first, so
-//!   a death reorders them). It needs a per-game tree store (10 to 40 MB per game) that a
-//!   stateless or multi-container Lambda does not have, and it makes moves depend on history.
-//!   At best it is worth under 1.5x the simulations (about one row of the table above), so it
-//!   is not done.
+//! * **Tree reuse between moves is evaluation reuse only.** Keeping the subtree under the joint
+//!   move actually played, with its statistics, is not done: on average 49% of a 4096-simulation
+//!   tree lies under the child of the searched moves of *all* seats (33% in 4-seat standard, 37%
+//!   royale, 56% duel, 63% constrictor), an upper bound since real opponents often play otherwise;
+//!   the next request matches that child only if no food spawned (the search does not model
+//!   spawns), the royale zone did not shrink onto unknown sides, and the seats are mapped back
+//!   (the request puts living snakes first, so a death reorders them); and it would make moves
+//!   depend on history. What is done is [`Search::set_reuse`]: the next search copies the network
+//!   evaluation of every node whose state is in the kept tree and calls the network only for the
+//!   others, so the tree and the move are bit-identical to a fresh search's and only the time
+//!   changes. The Lambda engine keeps the last tree of its 4 most recent games
+//!   (`native/crates/lambda/README.md`). In a 200 ms search it adds 4% to 43% simulations on
+//!   one x86 core.
 //!
 //! ## Measured: deadlines, simulations and memory
 //!

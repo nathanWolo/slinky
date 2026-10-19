@@ -324,7 +324,8 @@ pub struct Choice {
     pub mv: Move,
     /// Search or fallback.
     pub by: By,
-    /// Simulations run (0 for a fallback).
+    /// Simulations run: 0 for a fallback, and for a forced move that the early stop answered at
+    /// once (module docs).
     pub simulations: usize,
     /// Mode name the network was told.
     pub mode: Option<&'static str>,

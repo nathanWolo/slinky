@@ -50,7 +50,9 @@
 //! Under a deadline the search also stops early when more simulations cannot change anything
 //! or teach anything ([`StopReason::Solved`]): at once when the root's game is over, and once a
 //! root whose whole tree is solved (every line expanded down to a finished game) has run
-//! [`SOLVED_SIMULATIONS`] simulations. A fixed simulation count always runs in full.
+//! [`SOLVED_SIMULATIONS`] simulations. A fixed simulation count runs in full unless
+//! [`Search::set_stop_when_decided`] is set: the search can then end early with
+//! [`StopReason::Decided`].
 //!
 //! A deadline is checked before every simulation (a monotonic [`Instant::now`] read, about 20 ns
 //! against 20 to 100 us per simulation), so a search ends at most one simulation after its

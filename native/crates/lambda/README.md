@@ -74,6 +74,15 @@ once (`sims` 0) only with `REUSE=0`. With `REUSE` the engine keeps the last tree
 most recent games, and the next move copies the network evaluation of every node it shares with
 that tree (`reused` in the log line). Both apply to a one-tree search (`THREADS=1`).
 
+Measured: on one x86 core a 256-simulation `/az-256` move takes 37-54% of the time it took before
+the early stop, the reuse and the structured first layer, and a fresh 200 ms `/az-t200` search
+reaches 20-23% more simulations, plus 4-43% from reuse. On Graviton2 (the `{"bench": ...}` report
+of a Lambda test function, 1,769 MB, 2026-10-18), ms per 256-simulation move plain -> early stop
+-> early stop + reuse: duel 23.2 -> 15.3 -> 12.6, standard 38.9 -> 29.5 -> 29.3, royale 39.2 ->
+28.8 -> 27.7, constrictor 30.1 -> 14.2 -> 11.6, with the same move as the plain search in 240 of
+240 positions. Simulations in a 200 ms search, fresh / with reuse: duel 2,341 / 3,019, standard
+1,208 / 1,269, royale 2,402 / 3,428, constrictor 4,581 / 5,057.
+
 ### Memory
 
 `MEMORY_LIMIT_MB` caps one search tree. With `REUSE` each of a snake's 4 kept games holds its
@@ -143,8 +152,9 @@ Both come from a throwaway venv:
 Output: `$CARGO_TARGET_DIR/lambda/slinky-lambda/bootstrap.zip`: `bootstrap` at the root and
 `weights/az-modes/...` (which is `/var/task/weights/az-modes`). Measured sizes (M network): arm64
 binary 2.18 MB, zip 2.28 MB; x86 zip 2.38 MB. Built and checked as ELF aarch64 and x86-64
-(glibc 2.17 symbols via zig, fine for `provided.al2023`). The arm64 binary was built but not run
-(no arm64 machine here).
+(glibc 2.17 symbols via zig, fine for `provided.al2023`). The arm64 binary runs on Lambda
+(`slinky-native`); the NEON, `sdot` and early-stop code of this version was also run on a
+Graviton2 test function on 2026-10-18 (`deploy/lambda-native/README.md`).
 
 Optional speed-up, x86 only: `RUSTFLAGS="-C target-cpu=x86-64-v3"` (AVX2) makes the move about 20 to
 25% faster (measured on the PC: standard 4p 14.7 ms against 18.9 ms in the same session) with the
@@ -220,8 +230,9 @@ slinky-lambda --example lambda_bench -- <run dir>`.
 ## Lambda cost and timing
 
 What is measured: everything in the tables above, on x86 hosts that are faster (PC) or about as
-fast (laptop) as a Lambda vCPU. What is estimated: every arm64 figure (Graviton2 on Lambda; no arm64
-machine here), every Lambda-side figure, and the prices.
+fast (laptop) as a Lambda vCPU. What is estimated: every arm64 figure except the Graviton2 ones in
+Early stop and reuse above (a Lambda test function, 2026-10-18), every Lambda-side figure, and the
+prices.
 
 A vCPU share is proportional to memory: 1769 MB is one full vCPU, 3538 MB two; below 1769 MB the
 function gets a fractional vCPU and the times above grow in proportion (1024 MB is 0.58 vCPU:

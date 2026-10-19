@@ -20,7 +20,7 @@ functions they port.
 |---|---|---|---|
 | `crates/rules` | `slinky-rules` | Game state (up to 4 seats, boards up to 11x11 = 121 cells as `u128` bitboards). The rules step for standard, royale and constrictor without food spawns. Action masks, legal moves, certain starvation, royale zones and placement values | `rules.py`, `types.py`, parts of `mcts.py` |
 | `crates/obs` | `slinky-obs` | Egocentric 21x21x13 observations, the 7 mode features and constrictor food hiding | `observations.py`, `modes.py`, `unified.policy_inputs` |
-| `crates/net` | `slinky-net` | Loads `params.npz` and `config.json` (its own npy/zip reader), then runs the forward pass: config-driven convs, the hidden layer, features, policy and value heads. Sparse and padding-aware, with no `unsafe` | `az_modes.network`, `unified.torso`, `unified.load_params_like` |
+| `crates/net` | `slinky-net` | Loads `params.npz` and `config.json` (its own npy/zip reader), then runs the forward pass: config-driven convs, the hidden layer, features, policy and value heads. Sparse and padding-aware; `unsafe` only in the SIMD lanes and the int8 dot-product kernels | `az_modes.network`, `unified.torso`, `unified.load_params_like` |
 | `crates/api` | `slinky-api` | Battlesnake API types. Converts a request into a config, a mode and a state (our snake in seat 0), and computes the safe-move fallback. Requests are read with Python's semantics (`py.rs`) | `server.py` (`game_config`, `request_state`, `royale_sides`, `safe_move`), `engine_json.py` |
 | `crates/search` | `slinky-search` | The PUCT search, JAX threefry noise, the `Agent` API (request in, move out) and the `naz` CLI | `mcts.search`, `az_modes.agent_search` / `make_evaluator` / `make_policy`, `agents.check_game` |
 | `crates/lambda` | `slinky-lambda` | An AWS Lambda handler skeleton (routing, the info response and the `/start` snake-count cache). It is **not yet wired to the engine** and answers "up"; see its README | `deploy/lambda` |
@@ -352,6 +352,11 @@ used as-is.
    only bit-for-bit equality with a particular server process depends on it.
 9. **Build warning.** Cargo warns about an output filename collision: four crates have an
    example named `bench`. Rename them before Cargo makes this a hard error.
-10. **Architecture coverage.** Speed was measured on x86-64 (an SSE2 baseline build), not on the
-    Lambda's arm64 (Graviton). Expect a different per-row cost there. The code has no
-    architecture-specific paths.
+10. **Architecture coverage.** The tables above were measured on x86-64 (an SSE2 baseline build).
+    The f32 kernels use NEON lanes on aarch64 and SSE lanes on x86-64
+    (`crates/net/src/simd.rs`), with the same per-lane arithmetic as the scalar code, and the
+    optional int8 network has aarch64 `sdot` and x86-64 AVX-VNNI kernels (the VNNI one has never
+    run on a test machine). On Graviton2 (a Lambda test function, 2026-10-18) the network takes
+    about 39-42 us per row on the structured path and 46-51 us on the dense one, and the
+    early-stop and reuse searches chose the plain search's move in 240 of 240 positions:
+    `deploy/lambda-native/README.md`.
