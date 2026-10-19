@@ -5,8 +5,10 @@
 //! The run dir is `$NAZ_RUN` (default: the deployed M network); without it the tests SKIP.
 
 use serde_json::{Value, json};
+use slinky_env::{EnvConfig, Game, Rng as EnvRng, random_legal, to_request_json};
 use slinky_lambda::App;
-use slinky_lambda::engine::{By, Settings, SnakeEngine, SnakeSpec, tie_seed};
+use slinky_lambda::engine::{By, Choice, Settings, SnakeEngine, SnakeSpec, tie_seed};
+use slinky_rules::{Mode, Move};
 use slinky_search::MoveBudget;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -915,4 +917,212 @@ fn search_panic_answers_the_safe_move() {
     assert!(is_move(&v));
     let (c, v) = mv(&app, "/m/move", &ok);
     assert!(c == 200 && is_move(&v));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Early stop and reuse through the engine (the deployed defaults).
+
+/// A duel request in which seat 0 has exactly one legal move (up): its head is in the corner
+/// (0, 0) with the neck at (1, 0).
+fn forced_duel() -> Value {
+    let mut r = examples()["requests"]["duel"].clone();
+    let head = json!({"x": 0, "y": 0});
+    let body = json!([{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 2, "y": 0}]);
+    r["you"]["head"] = head.clone();
+    r["you"]["body"] = body.clone();
+    r["board"]["snakes"][0]["head"] = head;
+    r["board"]["snakes"][0]["body"] = body;
+    r["game"]["timeout"] = json!(10_000); // the deadline never cuts a simulation count here
+    let game = slinky_api::game_from_request(
+        &slinky_api::Request::from_json(&r.to_string()).unwrap(),
+        None,
+    )
+    .unwrap();
+    let legal = game.state.legal_moves(&game.config);
+    assert_eq!(
+        legal[0],
+        [true, false, false, false],
+        "seat 0 must be forced"
+    );
+    r
+}
+
+/// The request after `req` when seat 0 plays up and the opponent plays `opp` (no food spawns):
+/// the position of the root's child for those moves.
+fn after_up(req: &Value, opp: Move) -> Value {
+    let game = slinky_api::game_from_request(
+        &slinky_api::Request::from_json(&req.to_string()).unwrap(),
+        None,
+    )
+    .unwrap();
+    let next = game
+        .state
+        .child(&game.config, &[Move::Up as u8, opp as u8, 0, 0]);
+    let env = EnvConfig::ladder(Mode::Duel).unwrap();
+    let moved = to_request_json(&env, &next, 0, "g").unwrap();
+    let mut r = req.clone();
+    r["turn"] = moved["turn"].clone();
+    r["board"] = moved["board"].clone();
+    r["you"] = moved["you"].clone();
+    r
+}
+
+/// The forced move of [`forced_duel`] through an engine with `extra` settings, and the ms it took.
+fn forced(run: &Path, extra: &[(&str, &str)]) -> (Choice, f64) {
+    let e = engine(run, extra);
+    let t = Instant::now();
+    let c = e.choose(&forced_duel().to_string(), "g", "0", None, t);
+    assert_eq!(
+        (c.by, c.mv),
+        (By::Engine, Move::Up),
+        "{extra:?}: {:?}",
+        c.error
+    );
+    (c, t.elapsed().as_secs_f64() * 1e3)
+}
+
+/// A snake with a time budget and `REUSE` searches a forced move to its deadline instead of
+/// stopping at once (the early stop would only end forced moves there), and keeps that tree:
+/// the next move reuses it.
+#[test]
+fn budget_snake_with_reuse_searches_a_forced_move_and_keeps_its_tree() {
+    let Some(run) = run_dir() else { return };
+    let req = forced_duel();
+    // Whatever the opponent plays, the next position is in the forced move's tree. (Each
+    // search replaces the game's kept tree, so every case starts from a new engine.)
+    for opp in [Move::Down, Move::Left] {
+        let e = engine(&run, &[("BUDGET_MS", "60")]);
+        let t = Instant::now();
+        let c = e.choose(&req.to_string(), "g", "0", None, t);
+        let ms = t.elapsed().as_secs_f64() * 1e3;
+        assert_eq!((c.by, c.mv), (By::Engine, Move::Up), "{:?}", c.error);
+        // A deadline stop (`cut`), not a `Decided` one (0 simulations, not cut).
+        assert!(
+            c.cut && c.simulations > 0,
+            "{} simulations, cut {}",
+            c.simulations,
+            c.cut
+        );
+        assert!(ms >= 55.0, "answered after {ms:.0} ms");
+        let next = after_up(&req, opp);
+        let n = e.choose(&next.to_string(), "g", "1", None, Instant::now());
+        assert_eq!(n.by, By::Engine, "{:?}", n.error);
+        assert!(n.reused > 0, "{opp:?}: nothing reused after a forced move");
+    }
+}
+
+/// A snake with a simulation count answers a forced move at once, with no simulation, and runs
+/// the whole count when the early stop is switched off.
+#[test]
+fn simulations_snake_answers_a_forced_move_with_no_simulation() {
+    let Some(run) = run_dir() else { return };
+    let (c, _) = forced(&run, &[]);
+    assert_eq!((c.simulations, c.cut), (0, false));
+    let (c, _) = forced(&run, &[("REUSE", "0")]);
+    assert_eq!((c.simulations, c.cut), (0, false));
+    let (c, _) = forced(&run, &[("EARLY_STOP", "0")]);
+    assert_eq!((c.simulations, c.cut), (256, false));
+}
+
+/// Without the reuse a snake with a time budget still stops a forced move at once, and
+/// `EARLY_STOP=0` makes it search to the deadline in every case.
+#[test]
+fn budget_snake_without_reuse_stops_a_forced_move_at_once() {
+    let Some(run) = run_dir() else { return };
+    let (c, ms) = forced(&run, &[("BUDGET_MS", "200"), ("REUSE", "0")]);
+    assert_eq!((c.simulations, c.cut), (0, false));
+    assert!(ms < 100.0, "a decided move took {ms:.0} ms");
+    for reuse in ["0", "1"] {
+        let (c, ms) = forced(
+            &run,
+            &[("BUDGET_MS", "60"), ("REUSE", reuse), ("EARLY_STOP", "0")],
+        );
+        assert!(
+            c.cut && c.simulations > 0,
+            "REUSE={reuse}: {} simulations",
+            c.simulations
+        );
+        assert!(ms >= 55.0, "REUSE={reuse}: answered after {ms:.0} ms");
+    }
+}
+
+/// Plays `games` (a mode and a seed each) interleaved, one move per game in turn: seat 0 plays
+/// the move of the engine with the deployed defaults (early stop and reuse) while the plain
+/// engine (`REUSE=0`) answers the same requests. Every move and simulation count agrees. Returns
+/// the nodes the reusing engine took from its kept trees.
+fn interleaved_games(run: &Path, games: &[(Mode, u64)], turns: usize) -> usize {
+    let (kept, plain) = (engine(run, &[]), engine(run, &[("REUSE", "0")]));
+    let mut state: Vec<(EnvConfig, Game, EnvRng)> = games
+        .iter()
+        .map(|&(mode, seed)| {
+            let env = EnvConfig::ladder(mode).unwrap();
+            (env, Game::new(env, seed), EnvRng::new(seed + 1000))
+        })
+        .collect();
+    let (mut reused, mut moves, mut saved) = (0, 0, 0);
+    for turn in 0..turns {
+        for (g, (env, game, rng)) in state.iter_mut().enumerate() {
+            let id = format!("interleaved-{g}");
+            let Some(mut req) = to_request_json(env, &game.state, 0, &id) else {
+                continue;
+            };
+            req["game"]["timeout"] = json!(10_000); // the deadline never cuts a simulation count
+            let (body, t) = (req.to_string(), game.state.turn.to_string());
+            let n = env.rules().num_snakes();
+            let a = kept.choose(&body, &id, &t, Some(n), Instant::now());
+            let b = plain.choose(&body, &id, &t, Some(n), Instant::now());
+            let at = format!("game {g} ({:?}) turn {turn}", games[g].0);
+            assert_eq!(
+                (a.by, b.by),
+                (By::Engine, By::Engine),
+                "{at}: {:?}",
+                a.error
+            );
+            assert_eq!(
+                (a.mv, a.simulations, a.mode),
+                (b.mv, b.simulations, b.mode),
+                "{at}"
+            );
+            assert_eq!((a.cut, b.reused), (false, 0), "{at}");
+            reused += a.reused;
+            moves += 1;
+            saved += (a.reused > 0) as usize;
+            let mut actions = random_legal(rng, env.rules(), &game.state);
+            actions[0] = a.mv as u8;
+            game.step(&actions);
+        }
+    }
+    eprintln!(
+        "{moves} moves in {} games: {saved} reused trees, {reused} nodes",
+        games.len()
+    );
+    reused
+}
+
+/// Several games whose moves interleave through one engine (the game-keyed cache of kept trees):
+/// the same moves and simulation counts as without the reuse, and the trees are reused. With
+/// more games than the cache holds nothing is reused, and the moves are still the same.
+#[test]
+fn interleaved_games_play_the_same_with_and_without_reuse() {
+    let Some(run) = run_dir() else { return };
+    let four = [
+        (Mode::Duel, 11),
+        (Mode::Standard, 12),
+        (Mode::Royale, 13),
+        (Mode::Constrictor, 14),
+    ];
+    assert!(four.len() <= slinky_lambda::engine::GAME_TREES);
+    assert!(
+        interleaved_games(&run, &four, 14) > 0,
+        "no tree was ever reused"
+    );
+    let six = [
+        (Mode::Duel, 21),
+        (Mode::Duel, 22),
+        (Mode::Duel, 23),
+        (Mode::Standard, 24),
+        (Mode::Duel, 25),
+        (Mode::Duel, 26),
+    ];
+    interleaved_games(&run, &six, 10);
 }

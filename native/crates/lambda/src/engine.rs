@@ -11,7 +11,7 @@
 //! | `BUDGET_MS` | stop searching this many ms after the request reached the handler | none |
 //! | `THREADS` | root-parallel search trees (use the vCPU count; 1 is the plain search) | 1 |
 //! | `TIE_SEED` | fixed tie-break seed (testing only) | derived from game id and turn |
-//! | `MEMORY_LIMIT_MB` | cap on one search tree | 256 |
+//! | `MEMORY_LIMIT_MB` | cap on one search tree (with `REUSE` a snake holds up to 8 trees, see below) | 256 |
 //! | `DEADLINE_MARGIN_MS` | time kept for the network and Lambda's overhead (see below) | 150 |
 //! | `EARLY_STOP` | `0`: always run the whole simulation count (see below) | `1` |
 //! | `REUSE` | `0`: do not keep each game's last tree for its next move (see below) | `1` |
@@ -26,23 +26,31 @@
 //! `game.timeout` (500 ms when the request has none or an unusable one) minus
 //! `DEADLINE_MARGIN_MS`, counted from the request's arrival at the handler, and never after
 //! the Lambda invocation's own deadline minus the margin. When the deadline cuts a search,
-//! the answer is the best move of the simulations run so far (at least one always runs). A
-//! `BUDGET_MS` beyond the deadline is cut to it. A fixed `SIMULATIONS` search that finishes
-//! before its deadline is unchanged: the same move as without a deadline.
+//! the answer is the best move of the simulations run so far (at least one always runs, unless
+//! the move is decided at once: `StopReason::Decided`, 0 simulations on a forced move, see
+//! below). A `BUDGET_MS` beyond the deadline is cut to it. A fixed `SIMULATIONS` search that
+//! finishes before its deadline is unchanged: the same move as without a deadline.
 //!
 //! # Early stop and reuse
 //!
 //! Two speed-ups that never change a move. With `EARLY_STOP`, a search stops once our move
 //! leads every other root move by more than the simulations left
-//! (`Search::set_stop_when_decided`): the full count would choose the same move. With
-//! `BUDGET_MS` the simulations left are counted to the cap (`SIMULATIONS`, 16,384), so it ends
-//! forced moves and searches whose leader is out of reach before the cap; the deadline would
-//! have ended them with the same move, later (it saves time and billing, not strength). With `REUSE`,
-//! the engine keeps the last tree of each of the [`GAME_TREES`] most recent games, and the
-//! next move's search copies the network evaluation of every node it shares with that tree
-//! (`Search::set_reuse`). The tree and the move are bit-identical to a search without it; only
-//! the time differs. Both apply to a one-tree search (`THREADS=1`); the move's log line has the
-//! simulations run (`sims`) and the nodes reused (`reused`).
+//! (`Search::set_stop_when_decided`): the full count would choose the same move. A
+//! `SIMULATIONS` snake counts to its simulation count, so a forced move (one legal move) is
+//! answered with 0 simulations and `sims` below the count is normal. A `BUDGET_MS` snake counts
+//! to its cap (`SIMULATIONS`, 16,384), where early stop only ever ends forced moves (the
+//! deadline would end the others first), at the price of the next move's reuse: a forced
+//! move's tree, searched until the deadline, is the one the next move reuses most (47% of its
+//! nodes in a duel, against 33% after an ordinary move). So a `BUDGET_MS` snake stops early
+//! only with `REUSE=0`; with `REUSE` on it searches forced moves like any other, up to the
+//! deadline. `EARLY_STOP=0` turns early stop off everywhere. With `REUSE`, the engine keeps
+//! the last tree of each of the [`GAME_TREES`] most recent games, and the next move's search
+//! copies the network evaluation of every node it shares with that tree (`Search::set_reuse`).
+//! The tree and the move are bit-identical to a search without it; only the time differs. Each
+//! kept workspace holds its current and previous tree, so a snake holds up to 2 x
+//! [`GAME_TREES`] = 8 trees, each up to `MEMORY_LIMIT_MB`. Both apply to a one-tree search
+//! (`THREADS=1`); the move's log line has the simulations run (`sims`) and the nodes reused
+//! (`reused`).
 //!
 //! # Seed policy
 //!
@@ -87,7 +95,8 @@ pub const DEFAULT_GAME_TIMEOUT_MS: u64 = 500;
 /// Largest `game.timeout` taken from a request (a larger one counts as this).
 pub const MAX_GAME_TIMEOUT_MS: u64 = 60_000;
 /// Games whose last search tree a snake keeps for reuse (`REUSE`): a container serves one
-/// request at a time, but the moves of concurrent games interleave.
+/// request at a time, but the moves of concurrent games interleave. Each game's workspace
+/// holds its current and previous tree, so a snake holds up to `2 * GAME_TREES` trees.
 pub const GAME_TREES: usize = 4;
 /// Default `DEADLINE_MARGIN_MS`: the round trip between Battlesnake's engine and the Function
 /// URL, plus Lambda's own overhead per invocation.
@@ -121,11 +130,12 @@ pub struct Settings {
     pub threads: usize,
     /// Fixed tie-break seed.
     pub tie_seed: Option<u32>,
-    /// Memory cap of one tree, bytes.
+    /// Memory cap of one tree, bytes (a snake holds up to `2 * GAME_TREES` with `REUSE`).
     pub memory_limit: usize,
     /// Time kept back from the game's timeout for the network and Lambda (ms).
     pub deadline_margin_ms: u64,
-    /// `EARLY_STOP`: stop a search once our move is decided.
+    /// `EARLY_STOP`: stop a search once our move is decided (not for a `BUDGET_MS` snake while
+    /// `reuse` is on, module docs).
     pub early_stop: bool,
     /// `REUSE`: keep each game's last tree and reuse its evaluations.
     pub reuse: bool,
@@ -453,7 +463,11 @@ impl SnakeEngine {
             ws.push(Search::with_memory_limit(self.memory_limit));
         }
         let res = if self.threads <= 1 {
-            ws[0].set_stop_when_decided(agent.early_stop().then_some(0));
+            // A time-budget snake that reuses trees searches a forced move to its deadline:
+            // that tree is the one the next move reuses most (module docs).
+            let timed = matches!(agent.budget(), MoveBudget::Time { .. });
+            let stop_early = agent.early_stop() && !(self.reuse && timed);
+            ws[0].set_stop_when_decided(stop_early.then_some(0));
             if ws[0].reuse() != self.reuse {
                 ws[0].set_reuse(self.reuse);
             }
