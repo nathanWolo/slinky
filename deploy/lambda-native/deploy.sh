@@ -10,9 +10,17 @@
 # (slinky-native), REGION (us-east-2), ROLE (slinky-snake-lambda, shared with the Python
 # function), MEMORY_MB (1769: one full vCPU), and the function's environment: SNAKES
 # (az-256=az-modes:simulations=256,az-t200=az-modes:budget_ms=200), SNAKE_AUTHOR (slinky),
-# SNAKE_HEAD / SNAKE_TAIL (default), DEADLINE_MARGIN_MS (150), THREADS, and every
-# SNAKE_COLOR_*, SNAKE_HEAD_*, SNAKE_TAIL_* (az-t200: #ef4444, cosmic-horror; az-256:
-# #166534, bendr, hook). A deployed value wins over these defaults: to change one, set it here.
+# SNAKE_HEAD / SNAKE_TAIL (default), DEADLINE_MARGIN_MS (150), THREADS, EARLY_STOP and
+# REUSE (0 or 1; the engine's speed-ups, on when unset), and every SNAKE_COLOR_*,
+# SNAKE_HEAD_*, SNAKE_TAIL_* (az-t200: #ef4444, cosmic-horror; az-256: #166534, bendr, hook).
+# A deployed value wins over these defaults: to change one, set it here. That includes
+# EARLY_STOP and REUSE: a 0 stays deployed until a later run sets it to 1 explicitly.
+#
+# The speed-ups off on the live function, without a rebuild (README: Switching the speed-ups off):
+#
+#   EARLY_STOP=0 REUSE=0 SKIP_BUILD=1 AWS_PROFILE=slinky deploy/lambda-native/deploy.sh
+#
+# To roll back to a previous zip, copy it to dist/native.zip and deploy with SKIP_BUILD=1.
 # The AWS CLI is $AWS, else `aws` on the PATH, else ~/.local/bin/aws.
 set -euo pipefail
 
@@ -62,10 +70,14 @@ merged |= {"SNAKE_COLOR_AZ_T200": "#ef4444", "SNAKE_HEAD_AZ_T200": "cosmic-horro
            "SNAKE_TAIL_AZ_T200": "cosmic-horror",
            "SNAKE_COLOR_AZ_256": "#166534", "SNAKE_HEAD_AZ_256": "bendr", "SNAKE_TAIL_AZ_256": "hook"}
 merged.update(json.loads(os.environ["DEPLOYED"] or "null") or {})
+for k in ("EARLY_STOP", "REUSE"):  # the engine fails at init on anything but 0 and 1
+    if k in os.environ and os.environ[k].strip() not in ("0", "1"):
+        sys.exit(f"{k} must be 0 or 1, not {os.environ[k]!r}")
 for k, v in os.environ.items():
-    if k in ("SNAKES", "SNAKE_AUTHOR", "SNAKE_HEAD", "SNAKE_TAIL", "DEADLINE_MARGIN_MS", "THREADS") or (
-        k.startswith(("SNAKE_COLOR_", "SNAKE_HEAD_", "SNAKE_TAIL_"))
-    ):
+    if k in (
+        "SNAKES", "SNAKE_AUTHOR", "SNAKE_HEAD", "SNAKE_TAIL", "DEADLINE_MARGIN_MS", "THREADS",
+        "EARLY_STOP", "REUSE",
+    ) or k.startswith(("SNAKE_COLOR_", "SNAKE_HEAD_", "SNAKE_TAIL_")):
         merged[k] = v
 with open(sys.argv[1], "w") as f:
     json.dump({"Variables": merged}, f)

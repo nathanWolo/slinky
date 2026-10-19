@@ -33,8 +33,10 @@ Settings (environment variables): ``SNAKE_AUTHOR``, ``SNAKE_HEAD``,
 snakes: ``SNAKE_SIMULATIONS_<NAME>`` (simulations per move, default from the
 name: 256 for ``az-256``), ``SNAKE_BUDGET_MS_<NAME>`` (optional: also stop that
 many ms after the request's arrival), ``NATIVE_MARGIN_MS`` (default 150: the
-time kept for the network and Lambda's overhead), ``WEIGHTS_DIR`` (default
-``weights/``) and ``ENGINE_BIN`` (default ``bin/slinky-engine``).
+time kept for the network and Lambda's overhead), ``EARLY_STOP`` and ``REUSE``
+(``0`` switches off the engine's speed-ups that keep the moves, the early stop
+and the reuse of each game's last tree; both are on when unset), ``WEIGHTS_DIR``
+(default ``weights/``) and ``ENGINE_BIN`` (default ``bin/slinky-engine``).
 """
 
 from __future__ import annotations
@@ -143,7 +145,7 @@ class Engine:
             "SNAKES": ",".join(specs),
             "DEADLINE_MARGIN_MS": str(MARGIN_MS),
         }
-        for k in ("NATIVE_THREADS", "TIE_SEED", "MEMORY_LIMIT_MB", "DEBUG_PANIC"):
+        for k in ("NATIVE_THREADS", "TIE_SEED", "MEMORY_LIMIT_MB", "DEBUG_PANIC", "EARLY_STOP", "REUSE"):
             if os.environ.get(k):
                 env["THREADS" if k == "NATIVE_THREADS" else k] = os.environ[k]
         return env

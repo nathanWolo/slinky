@@ -44,7 +44,17 @@ and `SNAKE_COLOR_<NAME>` (e.g. `SNAKE_COLOR_PPO`, `SNAKE_COLOR_AZ_256`) for the 
 responses; `CHECKPOINTS`. Native snakes: `SNAKE_SIMULATIONS_<NAME>` (simulations per move,
 default 256 for `az-256`), `SNAKE_BUDGET_MS_<NAME>` (optional: also stop that many ms after
 the arrival), `NATIVE_MARGIN_MS` (default 150), `NATIVE_THREADS` (root-parallel trees, default
-1), `WEIGHTS_DIR`, `ENGINE_BIN`.
+1), `EARLY_STOP` and `REUSE` (`0` switches off the engine's early stop and its reuse of each game's
+last tree; both are on when unset), `WEIGHTS_DIR`, `ENGINE_BIN`.
+
+A `bin/slinky-engine` built before the early stop and the tree reuse were merged has neither. The
+next rebuild of it (`build.sh`) turns both on for its `/az-256` (the
+moves stay the same; `sims` in the log lines drops below 256 and is 0 on a forced move, and a
+`reused` count appears), and `EARLY_STOP=0 REUSE=0 deploy.sh` is the switch to turn them off again
+without a rebuild. That rebuild also brings the structured first layer, whose outputs differ from
+the dense path's by typically ~2e-7 and at most a few 1e-6, so it can flip a rare near-tie (the
+461 Python-golden requests still agree). Nothing here was deployed. The native function
+`slinky-native` has the same switch: `deploy/lambda-native/README.md`.
 
 ```bash
 deploy/lambda/build.sh                          # or build.sh <python with pip and numpy>

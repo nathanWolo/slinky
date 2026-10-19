@@ -17,7 +17,8 @@
 # overrides the deployed value: SNAKE_AUTHOR, SNAKE_HEAD, SNAKE_TAIL (defaults
 # slinky, default, default), SNAKE_HEAD_AZ_256 and SNAKE_TAIL_AZ_256
 # (cosmic-horror, as the ladder server), SNAKE_SIMULATIONS_AZ_256 (256),
-# NATIVE_MARGIN_MS (150), NATIVE_THREADS, and every SNAKE_COLOR_*,
+# NATIVE_MARGIN_MS (150), NATIVE_THREADS, EARLY_STOP and REUSE (0 or 1: the native engine's
+# speed-ups, on when unset; a deployed 0 stays until set to 1), and every SNAKE_COLOR_*,
 # SNAKE_HEAD_*, SNAKE_TAIL_*, SNAKE_SIMULATIONS_* and SNAKE_BUDGET_MS_*. The AWS CLI is $AWS, else `aws` on the PATH, else
 # ~/.local/bin/aws.
 set -euo pipefail
@@ -97,8 +98,14 @@ merged = {
     "NATIVE_MARGIN_MS": "150",
 }
 merged.update(deployed)
+for k in ("EARLY_STOP", "REUSE"):  # the engine fails at init on anything but 0 and 1
+    if k in os.environ and os.environ[k].strip() not in ("0", "1"):
+        sys.exit(f"{k} must be 0 or 1, not {os.environ[k]!r}")
 for k, v in os.environ.items():
-    if k in ("SNAKE_AUTHOR", "SNAKE_HEAD", "SNAKE_TAIL", "NATIVE_MARGIN_MS", "NATIVE_THREADS") or (
+    if k in (
+        "SNAKE_AUTHOR", "SNAKE_HEAD", "SNAKE_TAIL", "NATIVE_MARGIN_MS", "NATIVE_THREADS",
+        "EARLY_STOP", "REUSE",
+    ) or (
         k.startswith(("SNAKE_COLOR_", "SNAKE_HEAD_", "SNAKE_TAIL_", "SNAKE_SIMULATIONS_", "SNAKE_BUDGET_MS_"))
     ):
         merged[k] = v
