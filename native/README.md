@@ -191,7 +191,9 @@ Agents:
   deployed engine's speed-ups that keep the moves; the engine itself does not stop a
   time-budget search early when the reuse is on) and `:int8=1` (the int8 network,
   `Network::quantize_int8`: off in every serving path, changes the outputs, strength
-  untested). A bare run dir also works.
+  untested) and `:rescale_q=1` (search values scaled to the range each seat can still
+  reach, `Agent::with_rescale_q`: off in every serving path, changes 4-snake moves once a
+  snake is dead). A bare run dir also works.
 
 Options:
 

@@ -228,6 +228,14 @@ impl Agent {
         self.reuse
     }
 
+    /// The same agent scaling each seat's values to the range it can still reach
+    /// ([`SearchConfig::rescale_q`]; changes the moves of 4-seat games once a snake is dead).
+    /// Off by default.
+    pub fn with_rescale_q(mut self, on: bool) -> Agent {
+        self.settings.rescale_q = on;
+        self
+    }
+
     /// The network.
     pub fn network(&self) -> &Network {
         &self.net

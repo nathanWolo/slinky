@@ -9,7 +9,9 @@
 //!   (the ladder agent). `time_ms=T` searches each move for `T` ms (not deterministic), at most
 //!   `max_simulations`. `threads=K` uses K root-parallel trees (not recommended).
 //!   `early_stop=1` and `reuse=1` turn on the deployed engine's two speed-ups that keep the
-//!   moves; `int8=1` runs the network in int8 (`Network::quantize_int8`; changes the outputs).
+//!   moves; `int8=1` runs the network in int8 (`Network::quantize_int8`; changes the outputs);
+//!   `rescale_q=1` scales the search values to the range each seat can still reach
+//!   (`Agent::with_rescale_q`; changes 4-snake moves once a snake is dead).
 
 use std::hash::Hasher;
 use std::path::{Path, PathBuf};
@@ -40,6 +42,8 @@ pub enum PlayerSpec {
         reuse: bool,
         /// Run the network in int8 (`Network::quantize_int8`).
         int8: bool,
+        /// Scale the search values to the reachable range ([`Agent::with_rescale_q`]).
+        rescale_q: bool,
     },
 }
 
@@ -64,6 +68,7 @@ impl PlayerSpec {
         let mut early_stop = false;
         let mut reuse = false;
         let mut int8 = false;
+        let mut rescale_q = false;
         for p in parts {
             let (key, value) = p
                 .split_once('=')
@@ -81,6 +86,7 @@ impl PlayerSpec {
                 "early_stop" => early_stop = num(value)? != 0,
                 "reuse" => reuse = num(value)? != 0,
                 "int8" => int8 = num(value)? != 0,
+                "rescale_q" => rescale_q = num(value)? != 0,
                 _ => return Err(format!("{text:?}: unknown field {key:?}")),
             }
         }
@@ -118,6 +124,7 @@ impl PlayerSpec {
             early_stop,
             reuse,
             int8,
+            rescale_q,
         })
     }
 
@@ -133,6 +140,7 @@ impl PlayerSpec {
                 early_stop,
                 reuse,
                 int8,
+                rescale_q,
             } => {
                 let mut s = format!("az_modes:{}", dir.display());
                 match *budget {
@@ -162,6 +170,9 @@ impl PlayerSpec {
                 if *int8 {
                     s += ":int8=1";
                 }
+                if *rescale_q {
+                    s += ":rescale_q=1";
+                }
                 s
             }
         }
@@ -179,6 +190,7 @@ impl PlayerSpec {
                 early_stop,
                 reuse,
                 int8,
+                rescale_q,
                 ..
             } => {
                 let base = dir
@@ -199,6 +211,9 @@ impl PlayerSpec {
                 }
                 if *int8 {
                     s += "-int8";
+                }
+                if *rescale_q {
+                    s += "-rq";
                 }
                 s
             }
@@ -241,6 +256,7 @@ impl Player {
                 early_stop,
                 reuse,
                 int8,
+                rescale_q,
             } => {
                 let mut net = Network::load(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
                 if *int8 {
@@ -252,7 +268,8 @@ impl Player {
                     .with_threads(*threads)
                     .with_memory_limit(*memory_limit)
                     .with_early_stop(*early_stop)
-                    .with_reuse(*reuse);
+                    .with_reuse(*reuse)
+                    .with_rescale_q(*rescale_q);
                 let weights_hash = Some(weights_hash(dir)?);
                 Ok(Player {
                     spec,
@@ -312,6 +329,10 @@ mod tests {
             "az_modes:/r/m:time_ms=50:early_stop=1:reuse=1:int8=1"
         );
         assert_eq!(s.short_name(), "m@50mser-int8");
+        let s = PlayerSpec::parse("az_modes:/r/m:time_ms=50:rescale_q=1").unwrap();
+        assert_eq!(s.name(), "az_modes:/r/m:time_ms=50:rescale_q=1");
+        assert_eq!(s.short_name(), "m@50ms-rq");
+        assert_eq!(PlayerSpec::parse(&s.name()).unwrap(), s);
         let s = PlayerSpec::parse("az_modes:/r/m:time_ms=100:memory_mb=64").unwrap();
         assert_eq!(s.name(), "az_modes:/r/m:time_ms=100:memory_mb=64");
         for bad in [

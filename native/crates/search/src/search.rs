@@ -148,6 +148,9 @@ pub struct SearchConfig {
     pub tie_noise: f32,
     /// Depth limit of a descent before `min(max_depth, simulations)` (32).
     pub max_depth: usize,
+    /// Map each alive seat's `q` onto `[0, 1]` over the values still reachable at the node
+    /// instead of over `[-1, 1]` (off in the deployed runs; see `q_scale`).
+    pub rescale_q: bool,
 }
 
 impl Default for SearchConfig {
@@ -159,6 +162,7 @@ impl Default for SearchConfig {
             draw_value: -0.5,
             tie_noise: 0.01,
             max_depth: MAX_DEPTH,
+            rescale_q: false,
         }
     }
 }
@@ -285,6 +289,30 @@ impl Node {
             ..*self
         }
     }
+}
+
+/// The offset and factor that map an alive seat's value onto the PUCT formula's `[0, 1]` scale
+/// at a node whose state is `state`: `(q - lo) * inv_width`.
+///
+/// Off (`rescale_q` false) this is `0.5 * (q + 1)`, the range of the whole game. On, it is the
+/// range the seat can still reach: an alive seat has outlasted the `d` dead seats and can place
+/// anywhere among the `k` alive ones, so its placement value lies in
+/// `[(d - (k - 1)) / (N - 1), 1]` (a drawn finish included). In a 4-seat game with two seats
+/// dead that is `[1/3, 1]`: the 1v1 endgame is searched on the scale of a duel, where the fixed
+/// scale squeezes its stakes into a third of the range and lets the priors dominate. With nobody
+/// dead (every duel, and a 4-seat game before the first death) both give the same map.
+#[inline]
+fn q_scale(state: &GameState, n: usize, rescale_q: bool) -> (f32, f32) {
+    if rescale_q && n > 2 {
+        let k = state.alive.iter().take(n).filter(|&&a| a).count();
+        if k >= 2 && k < n {
+            let d = (n - k) as f32;
+            let m = (n - 1) as f32;
+            let lo = (d - (k - 1) as f32) / m;
+            return (lo, 1.0 / (1.0 - lo));
+        }
+    }
+    (-1.0, 0.5)
 }
 
 /// The mean value of a move from its sums and visits (`visits > 0`): the f32 sum in Python's
@@ -793,6 +821,11 @@ impl Search {
             let total: f32 = visits.iter().map(|&v| v as f32).sum();
             let sqrt_n = total.max(1.0).sqrt();
             let fpu = nd.value[p] - cfg.fpu_reduction;
+            let (lo, inv_width) = if cfg.rescale_q {
+                q_scale(&nd.state, n, true)
+            } else {
+                (-1.0, 0.5)
+            };
             let mut best = f32::NEG_INFINITY;
             let mut best_a = 0u8;
             for a in 0..NUM_ACTIONS {
@@ -807,7 +840,13 @@ impl Search {
                 };
                 let bonus = ((cfg.c_puct * nd.prior[p][a]) * sqrt_n) / (1.0 + nf);
                 let u = depth_noise(bits[p][a], depth);
-                let score = (0.5 * (q + 1.0) + bonus) + cfg.tie_noise * u;
+                // Off, the exact f32 expression of Python (`0.5 * (q + 1)`), for bit-identity.
+                let scaled = if cfg.rescale_q {
+                    (q - lo) * inv_width
+                } else {
+                    0.5 * (q + 1.0)
+                };
+                let score = (scaled + bonus) + cfg.tie_noise * u;
                 // jnp.argmax: the first maximum; a NaN counts as the maximum.
                 if score > best || (score.is_nan() && !best.is_nan()) {
                     best = score;
@@ -935,6 +974,28 @@ mod tests {
     fn joint_encoding() {
         assert_eq!(joint_of(&[1, 2, 3, 0], 3), 1 + 2 * 4 + 3 * 16);
         assert_eq!(joint_of(&[3, 3, 0, 0], 2), 15);
+    }
+
+    #[test]
+    fn q_scale_spans_the_reachable_values() {
+        let (_, mut s) = duel();
+        // Off, or with nobody dead, or in a duel: the whole game's [-1, 1].
+        s.alive = [true; MAX_SNAKES];
+        assert_eq!(q_scale(&s, 4, false), (-1.0, 0.5));
+        assert_eq!(q_scale(&s, 4, true), (-1.0, 0.5));
+        assert_eq!(q_scale(&s, 2, true), (-1.0, 0.5));
+        // One of four dead: [-1/3, 1]. Two dead (the 1v1 endgame): [1/3, 1].
+        s.alive[3] = false;
+        let (lo, w) = q_scale(&s, 4, true);
+        assert!((lo + 1.0 / 3.0).abs() < 1e-6 && (w - 0.75).abs() < 1e-6);
+        s.alive[1] = false;
+        let (lo, w) = q_scale(&s, 4, true);
+        assert!((lo - 1.0 / 3.0).abs() < 1e-6 && (w - 1.5).abs() < 1e-6);
+        // Over the reachable range a win maps to 1 and the worst outcome to 0.
+        assert!(((1.0 - lo) * w - 1.0).abs() < 1e-6);
+        // One alive: nothing left to decide, the default map.
+        s.alive[2] = false;
+        assert_eq!(q_scale(&s, 4, true), (-1.0, 0.5));
     }
 
     #[test]
