@@ -11,8 +11,9 @@
 # function), MEMORY_MB (1769: one full vCPU), and the function's environment: SNAKES
 # (az-256=az-modes:simulations=256,az-t200=az-modes:budget_ms=200), SNAKE_AUTHOR (slinky),
 # SNAKE_HEAD / SNAKE_TAIL (default), DEADLINE_MARGIN_MS (150), THREADS, EARLY_STOP and
-# REUSE (0 or 1; the engine's speed-ups, on when unset), RESCALE_Q (modes with rescaled search
-# values, e.g. standard or none; the engine's default standard when unset), and every SNAKE_COLOR_*,
+# REUSE (0 or 1; the engine's speed-ups, on when unset), RESCALE_Q (none, or a comma list of the
+# modes searched with rescaled values: standard, duel, royale, constrictor; for every snake; the
+# engine's default standard when unset), and every SNAKE_COLOR_*,
 # SNAKE_HEAD_*, SNAKE_TAIL_* (az-t200: #ef4444, cosmic-horror; az-256: #166534, bendr, hook).
 # A deployed value wins over these defaults: to change one, set it here. That includes
 # EARLY_STOP and REUSE: a 0 stays deployed until a later run sets it to 1 explicitly.
@@ -74,11 +75,25 @@ merged.update(json.loads(os.environ["DEPLOYED"] or "null") or {})
 for k in ("EARLY_STOP", "REUSE"):  # the engine fails at init on anything but 0 and 1
     if k in os.environ and os.environ[k].strip() not in ("0", "1"):
         sys.exit(f"{k} must be 0 or 1, not {os.environ[k]!r}")
-if "RESCALE_Q" in os.environ:  # the engine fails at init on anything else
-    modes = [m.strip() for m in os.environ["RESCALE_Q"].split(",") if m.strip()]
-    if modes != ["none"] and (not modes or len(set(modes)) != len(modes)
-                              or not set(modes) <= {"standard", "duel", "royale", "constrictor"}):
-        sys.exit(f"RESCALE_Q must be none or a list of modes, not {os.environ['RESCALE_Q']!r}")
+# RESCALE_Q: exactly what the engine accepts (Settings::from_lookup and parse_modes in
+# native/crates/lambda/src/engine.rs; the lambda crate's tests/deploy_script.rs runs this block on
+# the engine's case table). The engine fails at init on anything else, and then no new container
+# answers a /move until a redeploy. A blank value is the default (standard). Otherwise the whole
+# trimmed value is `none`, or it is a comma list of mode names, each once, with empty items
+# skipped: `,` is an empty list, but `none,` names a mode `none`. Names are case-sensitive. The
+# trim is Rust's (Unicode White_Space), not Python's strip(), which also takes U+001C to U+001F.
+RUST_SPACE = "\t\n\v\f\r \x85\xa0\u1680\u2028\u2029\u202f\u205f\u3000" + "".join(
+    map(chr, range(0x2000, 0x200B)))
+def rescale_q_ok(text):
+    text = text.strip(RUST_SPACE)
+    if text in ("", "none"):
+        return True
+    names = [n for n in (n.strip(RUST_SPACE) for n in text.split(",")) if n]
+    return len(set(names)) == len(names) and set(names) <= {
+        "standard", "duel", "royale", "constrictor"}
+if "RESCALE_Q" in os.environ and not rescale_q_ok(os.environ["RESCALE_Q"]):
+    sys.exit("RESCALE_Q must be none or a comma list of standard, duel, royale, constrictor "
+             f"(each once), not {os.environ['RESCALE_Q']!r}")
 for k, v in os.environ.items():
     if k in (
         "SNAKES", "SNAKE_AUTHOR", "SNAKE_HEAD", "SNAKE_TAIL", "DEADLINE_MARGIN_MS", "THREADS",

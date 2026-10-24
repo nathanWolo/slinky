@@ -6,7 +6,7 @@ with the az_modes weights. One Function URL, one path per snake:
 
 | path | search |
 |---|---|
-| `/az-256` | 256 simulations (the faithful port of the ladder agent); arena name AlphaSlinky-256 |
+| `/az-256` | 256 simulations (the Python ladder agent's search only with `RESCALE_Q=none`, see Rescaled endgame values); arena name AlphaSlinky-256 |
 | `/az-t200` | as many simulations as fit in 200 ms from the Function URL's receipt of the request (cap 16,384); arena name AlphaSlinky |
 
 Why a function of its own: the Python function `slinky-snake` (`deploy/lambda`) takes ~410 ms
@@ -34,6 +34,12 @@ Change the line-up or the think time with `SNAKES` (e.g.
 * With `REUSE` a snake holds up to 8 search trees (the current and the previous tree of each of
   its 4 most recent games): an estimated worst case of about 360 MB for `/az-t200`, which fits
   the 1,769 MB.
+
+Each snake also logs one `load` line per container start, with what is live for it:
+`early_stop` and `reuse` (true or false: `/az-t200` shows `early_stop` false while `REUSE` is
+on, as above), `rescale_q` (the modes searched with rescaled values, `["standard"]` by default,
+`[]` for `RESCALE_Q=none`), and `budget`, `threads`, `ok` and `ms`. After a deploy, the `load`
+lines of the new containers in CloudWatch show which setting is live.
 
 ## Switching the speed-ups off, and rolling back
 
@@ -79,11 +85,24 @@ error).
 
 ## Rescaled endgame values
 
-Since the build with `RESCALE_Q`, standard games are searched with each snake's values
-rescaled to the range it can still reach, so a 4-snake game's 1v1 endgame gets a duel's
-stakes (`native/crates/lambda/README.md`, Rescaled values: +26 Elo in self-play, and the arena
-snake was converting 43% of its standard endgames against 73-78% for the top snakes). Unlike
-the speed-ups it changes moves. Switch it off, or set other modes, without a rebuild:
+Since the build with `RESCALE_Q`, standard games are searched with each snake's values rescaled
+to the range it can still reach, so a 4-snake game's 1v1 endgame gets a duel's stakes
+(`native/crates/lambda/README.md`, Rescaled values, has the details). Unlike the speed-ups it
+changes moves. The range is taken at each node of the search tree, so a standard game of `n`
+snakes is searched differently wherever its tree reaches a node with 1 to `n - 2` snakes dead:
+also while all snakes are alive, and in 3-snake games. Duel, royale and constrictor are
+unchanged. `RESCALE_Q` is one setting for the whole function, with no per-snake option: `/az-256`
+is the Python ladder agent's search only with `RESCALE_Q=none`.
+
+`n` is the larger of the snake count `/start` left in the container and the snakes in the
+request, so a container that missed the game's `/start` searches a 4-snake game with 2 left as a
+duel (no rescale). The `{"bench"}` invocation below runs with the rescale off.
+
+The evidence: +26 Elo [+9, +44] in self-play on proxy weights at 50 ms a move, not yet on the
+deployed weights (a test is in progress), and the arena snake was converting 43% of its standard
+endgames against 73-78% for the top snakes. Switch it off, or set other modes, without a
+rebuild (`none`, or a comma list of `standard`, `duel`, `royale`, `constrictor`; `deploy.sh`
+refuses anything the engine would):
 
     RESCALE_Q=none SKIP_BUILD=1 AWS_PROFILE=slinky deploy/lambda-native/deploy.sh       # off
     RESCALE_Q=standard SKIP_BUILD=1 AWS_PROFILE=slinky deploy/lambda-native/deploy.sh   # back on
@@ -107,7 +126,8 @@ fresh containers), and put it back:
         --cli-binary-format raw-in-base64-out --payload '{"bench": {}}' bench.json
     aws --region us-east-2 lambda update-function-configuration --function-name slinky-native --timeout 3
 
-The int8 and bfloat16 networks exist only in this benchmark: no served snake uses them. Measured
+The benchmark searches with the rescale off (`RESCALE_Q` does not apply to it). The int8 and
+bfloat16 networks exist only in this benchmark: no served snake uses them. Measured
 on this hardware (a test function, Graviton2, 1,769 MB, 2026-10-18; the runtime selected the
 `sdot` kernel), network per row: dense `f32` about 46-51 us, structured `f32` about 39-42 us,
 structured int8 with `sdot` about 33-35 us (1.17 times faster than structured `f32`), the plain
