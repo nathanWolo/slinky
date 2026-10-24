@@ -100,9 +100,10 @@ three times as much as in a duel.
 Which moves change. The range comes from each tree node's own state, so a standard game of `n`
 snakes is searched differently wherever its tree reaches a node with 1 to `n - 2` snakes dead,
 also while all snakes are alive, and in 3-snake games. A node with nobody dead, one with a single
-snake alive, and every node of a duel (`n <= 2`) keep the default map. Duel, royale and
-constrictor are unchanged unless `RESCALE_Q` names them. The setting is global: `/az-256` and
-`/az-t200` both get it, so `/az-256` is the Python agent's search only with `RESCALE_Q=none`.
+snake alive, and every node of a duel (`n <= 2`) keep the default map. Royale and constrictor are
+unchanged unless `RESCALE_Q` names them; naming `duel` changes nothing (`n = 2`). The setting is
+global: `/az-256` and `/az-t200` both get it, so `/az-256` is the Python agent's search only with
+`RESCALE_Q=none`.
 On the 461 golden ladder requests (89 of them standard, 256 simulations, the golden seeds) it
 changes the root visits of 37, 10 of them with every snake alive, and the move of 2.
 
@@ -115,8 +116,11 @@ Evidence: on arena the snake converted 43% of its standard 1v1 endgames against 
 top minimax snakes (2026-10-16 to 10-23). In self-play on the proxy weights at 50 ms a move,
 rescaled against plain, 1000 games a mode: standard +26 Elo [+9, +44] (win share 36.9% against
 a parity of 25%), royale -14 [-31, +4], constrictor +1 [-15, +17]; hence standard only. That test
-did not use the deployed weights or budgets (256 simulations, 200 ms) and played 4-snake games;
-a test on the deployed weights is in progress (2026-10-23).
+did not use the deployed weights or budgets (256 simulations, 200 ms) and played 4-snake games.
+On the deployed weights (`az-modes-M-s0`, standard, one rescaled seat against three plain ones,
+`naz-match` sequential test, 2026-10-23): at 256 simulations a win share of 33.1% +- 5.0 over
+320 games (about +69 Elo; the always-valid 95% interval [25.4%, 41.4%] clears parity), and at
+1024 simulations 51.6% +- 11.7 over 64 games ([29.8%, 72.9%]). Both are self-play results.
 
 ### Memory
 

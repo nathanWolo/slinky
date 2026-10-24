@@ -90,19 +90,20 @@ to the range it can still reach, so a 4-snake game's 1v1 endgame gets a duel's s
 (`native/crates/lambda/README.md`, Rescaled values, has the details). Unlike the speed-ups it
 changes moves. The range is taken at each node of the search tree, so a standard game of `n`
 snakes is searched differently wherever its tree reaches a node with 1 to `n - 2` snakes dead:
-also while all snakes are alive, and in 3-snake games. Duel, royale and constrictor are
-unchanged. `RESCALE_Q` is one setting for the whole function, with no per-snake option: `/az-256`
-is the Python ladder agent's search only with `RESCALE_Q=none`.
+also while all snakes are alive, and in 3-snake games. Duel, royale and constrictor are unchanged
+by the default. `RESCALE_Q` is one setting for the whole function, with no per-snake option:
+`/az-256` is the Python ladder agent's search only with `RESCALE_Q=none`.
 
 `n` is the larger of the snake count `/start` left in the container and the snakes in the
 request, so a container that missed the game's `/start` searches a 4-snake game with 2 left as a
 duel (no rescale). The `{"bench"}` invocation below runs with the rescale off.
 
-The evidence: +26 Elo [+9, +44] in self-play on proxy weights at 50 ms a move, not yet on the
-deployed weights (a test is in progress), and the arena snake was converting 43% of its standard
-endgames against 73-78% for the top snakes. Switch it off, or set other modes, without a
-rebuild (`none`, or a comma list of `standard`, `duel`, `royale`, `constrictor`; `deploy.sh`
-refuses anything the engine would):
+The evidence: +26 Elo [+9, +44] in self-play on proxy weights at 50 ms a move; on the deployed
+weights (one rescaled seat against three plain ones, 2026-10-23) a win share of 33.1% +- 5.0 over
+320 games at 256 simulations (parity 25%, about +69 Elo) and 51.6% +- 11.7 over 64 games at 1024;
+and the arena snake was converting 43% of its standard endgames against 73-78% for the top snakes.
+Switch it off, or set other modes, without a rebuild (`none`, or a comma list of `standard`,
+`duel`, `royale`, `constrictor`; `deploy.sh` refuses anything the engine would):
 
     RESCALE_Q=none SKIP_BUILD=1 AWS_PROFILE=slinky deploy/lambda-native/deploy.sh       # off
     RESCALE_Q=standard SKIP_BUILD=1 AWS_PROFILE=slinky deploy/lambda-native/deploy.sh   # back on

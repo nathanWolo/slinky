@@ -62,10 +62,10 @@
 //! own state, so the search changes wherever its tree reaches a node with 1 to `n - 2` of `n`
 //! snakes dead: in a standard game of 3 or more snakes, also while all of them are alive. It is
 //! the default map for `n <= 2`, for a node with nobody dead and for one with a single snake
-//! alive. Unlike the speed-ups it changes moves. Duel, royale and constrictor are unchanged
-//! unless named. The setting is global: every snake gets it, `/az-256` too, so that snake is
-//! the Python agent's search only with `RESCALE_Q=none`. The `{"bench"}` invocation runs with
-//! it off.
+//! alive. Unlike the speed-ups it changes moves. Royale and constrictor are unchanged unless
+//! named, and naming duel changes nothing (a duel has `n = 2`). The setting is global: every
+//! snake gets it, `/az-256` too, so that snake is the Python agent's search only with
+//! `RESCALE_Q=none`. The `{"bench"}` invocation runs with it off.
 //!
 //! `n` is the larger of the snake count `/start` left in this container's cache and the snakes
 //! listed in the request. On a container that missed the game's `/start`, a 4-snake game with
@@ -73,8 +73,10 @@
 //!
 //! In self-play on the proxy weights at 50 ms a move it gained +26 Elo [+9, +44] in standard,
 //! -14 [-31, +4] in royale and +1 [-15, +17] in constrictor (1000 games each), hence the default
-//! `standard`. It did not use the deployed weights or budgets (256 simulations, 200 ms); a test
-//! on the deployed weights is in progress.
+//! `standard`. It did not use the deployed weights or budgets (256 simulations, 200 ms). On the
+//! deployed weights, one rescaled seat against three plain ones in standard, the win share was
+//! 33.1% +- 5.0 over 320 games at 256 simulations (parity 25%, about +69 Elo) and 51.6% +- 11.7
+//! over 64 games at 1024 simulations (2026-10-23, `naz-match` sequential test, self-play).
 //!
 //! # Seed policy
 //!
