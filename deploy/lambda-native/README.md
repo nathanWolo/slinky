@@ -77,6 +77,19 @@ the zip's sha256; save the live one aside before the next build, as above), put 
 A build from before the speed-ups ignores `EARLY_STOP` and `REUSE` (an unknown variable is not an
 error).
 
+## Rescaled endgame values
+
+Since the build with `RESCALE_Q`, standard games are searched with each snake's values
+rescaled to the range it can still reach, so a 4-snake game's 1v1 endgame gets a duel's
+stakes (`native/crates/lambda/README.md`, Rescaled values: +26 Elo in self-play, and the arena
+snake was converting 43% of its standard endgames against 73-78% for the top snakes). Unlike
+the speed-ups it changes moves. Switch it off, or set other modes, without a rebuild:
+
+    RESCALE_Q=none SKIP_BUILD=1 AWS_PROFILE=slinky deploy/lambda-native/deploy.sh       # off
+    RESCALE_Q=standard SKIP_BUILD=1 AWS_PROFILE=slinky deploy/lambda-native/deploy.sh   # back on
+
+As with the speed-ups, a deployed value persists across later deploys until set again.
+
 ## Benchmark on the function's own CPU
 
 The binary answers a direct invocation `{"bench": {...}}` (never a Function URL request) with

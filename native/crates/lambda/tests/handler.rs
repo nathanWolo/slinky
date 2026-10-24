@@ -4,7 +4,8 @@
 //!   documented seed;
 //! * the 466 ladder-shaped requests of `review_ladder.jsonl` (golden vectors of the Python agent,
 //!   `$NAZ_GOLDEN`, default `/dev/shm/naz-golden`) through `/start` + `/move` with `TIE_SEED`
-//!   set to the golden seed: the move must equal the Python agent's;
+//!   set to the golden seed and `RESCALE_Q=none` (the Python search): the move must equal the
+//!   Python agent's;
 //! * routing, error and fallback behaviour; a time budget.
 //!
 //! The run dir is `$NAZ_RUN` (default: the deployed M network). Without it the tests print SKIP.
@@ -12,6 +13,7 @@
 use serde_json::{Value, json};
 use slinky_lambda::App;
 use slinky_lambda::engine::{Settings, tie_seed};
+use slinky_rules::Mode;
 use slinky_search::Agent;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -59,7 +61,10 @@ fn examples() -> Value {
 fn modes_match_agent_with_documented_seed() {
     let Some(run) = run_dir() else { return };
     let app = app(&run, &[]);
-    let agent = Agent::load(&run).unwrap();
+    // The engine's default RESCALE_Q.
+    let agent = Agent::load(&run)
+        .unwrap()
+        .with_rescale_q_modes(&[Mode::Standard]);
     let ex = examples();
     for mode in ["standard", "duel", "royale", "constrictor"] {
         let req = &ex["requests"][mode];
@@ -100,7 +105,7 @@ fn ladder_requests_match_python_golden() {
             continue; // Python plays its heuristic there; the fallback is tested below
         }
         let seed = v["seed"].as_u64().unwrap().to_string();
-        let app = app(&run, &[("TIE_SEED", &seed)]);
+        let app = app(&run, &[("TIE_SEED", &seed), ("RESCALE_Q", "none")]);
         let req = &v["request"];
         if let Some(n) = v["starting"].as_u64() {
             let mut start = req.clone();
@@ -179,11 +184,49 @@ fn unplayable_games_get_the_safe_move() {
 }
 
 #[test]
+fn rescale_q_applies_to_standard_after_a_death() {
+    let Some(run) = run_dir() else { return };
+    let ex = examples();
+    let start = &ex["requests"]["standard"];
+    // The same game two turns on, with two of its four snakes gone: a 1v1 endgame.
+    let mut endgame = start.clone();
+    endgame["turn"] = json!(2);
+    let snakes = endgame["board"]["snakes"].as_array().unwrap()[..2].to_vec();
+    if !snakes.iter().any(|s| s["id"] == endgame["you"]["id"]) {
+        endgame["you"] = snakes[0].clone();
+    }
+    endgame["board"]["snakes"] = json!(snakes);
+    let id = endgame["game"]["id"].as_str().unwrap().to_string();
+    let seed = tie_seed(&id, "2");
+    let plain = Agent::load(&run).unwrap();
+    let off = plain.play(&endgame.to_string(), Some(4), seed).unwrap();
+    let on = Agent::load(&run)
+        .unwrap()
+        .with_rescale_q_modes(&[Mode::Standard])
+        .play(&endgame.to_string(), Some(4), seed)
+        .unwrap();
+    assert_ne!(
+        on.search.visits, off.search.visits,
+        "rescaling changes the search"
+    );
+    for (env, want) in [(None, &on), (Some("none"), &off)] {
+        let extra: Vec<(&str, &str)> = env.map(|v| ("RESCALE_Q", v)).into_iter().collect();
+        let a = app(&run, &extra);
+        assert_eq!(call(&a, "POST", "/m/start", start).0, 200);
+        let (c, v) = call(&a, "POST", "/m/move", &endgame);
+        assert_eq!(c, 200);
+        assert_eq!(v["move"], want.mv.name(), "RESCALE_Q={env:?}");
+    }
+}
+
+#[test]
 fn simulations_threads_and_time_budget() {
     let Some(run) = run_dir() else { return };
     let ex = examples();
     let req = &ex["requests"]["standard"];
-    let agent = Agent::load(&run).unwrap();
+    let agent = Agent::load(&run)
+        .unwrap()
+        .with_rescale_q_modes(&[Mode::Standard]);
     // SIMULATIONS=1024: same as the agent with 1024 simulations.
     let a1k = app(&run, &[("SIMULATIONS", "1024"), ("TIE_SEED", "5")]);
     let (_, v) = call(&a1k, "POST", "/m/move", req);

@@ -118,6 +118,8 @@ pub struct Agent {
     memory_limit: usize,
     early_stop: bool,
     reuse: bool,
+    /// Per [`Mode`] (by id): search with [`SearchConfig::rescale_q`].
+    rescale_q: [bool; 4],
 }
 
 /// One move of the agent, with the root statistics of its search.
@@ -151,6 +153,7 @@ impl Agent {
             memory_limit: DEFAULT_MEMORY_LIMIT,
             early_stop: false,
             reuse: false,
+            rescale_q: [false; 4],
         }
     }
 
@@ -229,11 +232,34 @@ impl Agent {
     }
 
     /// The same agent scaling each seat's values to the range it can still reach
-    /// ([`SearchConfig::rescale_q`]; changes the moves of 4-seat games once a snake is dead).
-    /// Off by default.
+    /// ([`SearchConfig::rescale_q`]; changes the moves of 4-seat games once a snake is dead) in
+    /// every mode (`on`) or none. Off by default.
     pub fn with_rescale_q(mut self, on: bool) -> Agent {
-        self.settings.rescale_q = on;
+        self.rescale_q = [on; 4];
         self
+    }
+
+    /// The same agent with [`SearchConfig::rescale_q`] in exactly the games of `modes`. A duel
+    /// search is the same either way (nobody is dead before the game ends).
+    pub fn with_rescale_q_modes(mut self, modes: &[Mode]) -> Agent {
+        self.rescale_q = [false; 4];
+        for &m in modes {
+            self.rescale_q[m as usize] = true;
+        }
+        self
+    }
+
+    /// Whether games of `mode` are searched with [`SearchConfig::rescale_q`].
+    pub fn rescale_q(&self, mode: Mode) -> bool {
+        self.rescale_q[mode as usize]
+    }
+
+    /// The search constants for a game of `mode` (the run's, with the mode's `rescale_q`).
+    pub fn settings_for(&self, mode: Mode) -> SearchConfig {
+        SearchConfig {
+            rescale_q: self.rescale_q(mode),
+            ..self.settings
+        }
     }
 
     /// The network.
@@ -241,7 +267,7 @@ impl Agent {
         &self.net
     }
 
-    /// The search constants.
+    /// The run's search constants (`rescale_q` off; a game's own are [`Agent::settings_for`]).
     pub fn settings(&self) -> &SearchConfig {
         &self.settings
     }
@@ -287,7 +313,7 @@ impl Agent {
         let out = workspace.run(
             &game.config,
             &game.state,
-            &self.settings,
+            &self.settings_for(game.mode),
             budget,
             &mut eval,
             noise,
@@ -324,7 +350,7 @@ impl Agent {
             workspaces,
             &game.config,
             &game.state,
-            &self.settings,
+            &self.settings_for(game.mode),
             budget,
             &mut evals,
             &mut noises,

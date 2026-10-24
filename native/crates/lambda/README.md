@@ -40,6 +40,7 @@ the M network), each move is the faithful decoupled-PUCT search of the Python ag
 | `MEMORY_LIMIT_MB` | cap on one search tree (the search stops early when it is reached). With `REUSE` a snake holds up to 8 trees (2 x `GAME_TREES`: the current and the previous tree of each of 4 games), see Memory | 256 |
 | `EARLY_STOP` | `0`: always run the whole simulation count; `1`: stop once the leading move cannot be overtaken by the simulations left (the move is the same). A `BUDGET_MS` snake stops early only with `REUSE=0`, see Early stop and reuse | `1` |
 | `REUSE` | `0`: forget each search; `1`: keep each game's last tree (the 4 most recent games) and reuse its network evaluations (bit-identical moves) | `1` |
+| `RESCALE_Q` | modes (comma list of `standard`, `duel`, `royale`, `constrictor`, or `none`) whose search rescales each snake's values to the range it can still reach; changes moves, see Rescaled values | `standard` |
 | `DEADLINE_MARGIN_MS` | time kept for the network and Lambda's overhead: every search stops at `game.timeout` less this (see Deadline) | 150 |
 | `DEBUG_PANIC` | `search:<game id>` or `handler:<game id>`: panic on that game's `/move` (tests only) | off |
 | `SNAKE_AUTHOR`, `SNAKE_HEAD`, `SNAKE_TAIL`, `SNAKE_COLOR_<NAME>` | info response (`<NAME>` upper case, `-` and `.` become `_`) | `slinky`, `default`, `default`, `#8b5cf6` |
@@ -57,7 +58,7 @@ deadline less the margin. When the deadline cuts a search, the move is the best 
 simulations run so far (at least one always runs, unless the move is decided at once:
 `StopReason::Decided`, 0 simulations on a forced move). `BUDGET_MS` past the deadline is cut to
 it. A fixed `SIMULATIONS` search that ends before its deadline is unchanged (the 461 Python
-goldens still agree). Each move's log line has `deadline_ms` (arrival to deadline) and `cut`
+goldens still agree, with `RESCALE_Q=none`). Each move's log line has `deadline_ms` (arrival to deadline) and `cut`
 (a one-tree search was stopped by the deadline or the memory cap; a search that ended because
 its move was decided or its tree solved is not cut).
 
@@ -82,6 +83,19 @@ of a Lambda test function, 1,769 MB, 2026-10-18), ms per 256-simulation move pla
 28.8 -> 27.7, constrictor 30.1 -> 14.2 -> 11.6, with the same move as the plain search in 240 of
 240 positions. Simulations in a 200 ms search, fresh / with reuse: duel 2,341 / 3,019, standard
 1,208 / 1,269, royale 2,402 / 3,428, constrictor 4,581 / 5,057.
+
+### Rescaled values
+
+In the modes of `RESCALE_Q` (default `standard`) the search maps each alive snake's values onto
+the range it can still reach instead of the whole game's `[-1, 1]` (`SearchConfig::rescale_q`):
+once two of four snakes are dead, both survivors have already outlasted two, so the 1v1
+endgame's outcomes span `[1/3, 1]`, and on the fixed scale the PUCT priors outweigh those values
+three times as much as in a duel. Unlike the speed-ups this changes moves, in 4-snake games
+after the first death only (a duel is the same either way). On arena the snake converted 43% of
+its standard 1v1 endgames against 73-78% for the top minimax snakes (2026-10-16 to 10-23). In
+self-play on the proxy weights at 50 ms a move, rescaled against plain, 1000 games a mode: standard
++26 Elo [+9, +44] (win share 36.9% against a parity of 25%), royale -14 [-31, +4], constrictor
++1 [-15, +17]; hence standard only. `RESCALE_Q=none` is the Python agent's search.
 
 ### Memory
 

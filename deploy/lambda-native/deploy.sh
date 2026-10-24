@@ -11,7 +11,8 @@
 # function), MEMORY_MB (1769: one full vCPU), and the function's environment: SNAKES
 # (az-256=az-modes:simulations=256,az-t200=az-modes:budget_ms=200), SNAKE_AUTHOR (slinky),
 # SNAKE_HEAD / SNAKE_TAIL (default), DEADLINE_MARGIN_MS (150), THREADS, EARLY_STOP and
-# REUSE (0 or 1; the engine's speed-ups, on when unset), and every SNAKE_COLOR_*,
+# REUSE (0 or 1; the engine's speed-ups, on when unset), RESCALE_Q (modes with rescaled search
+# values, e.g. standard or none; the engine's default standard when unset), and every SNAKE_COLOR_*,
 # SNAKE_HEAD_*, SNAKE_TAIL_* (az-t200: #ef4444, cosmic-horror; az-256: #166534, bendr, hook).
 # A deployed value wins over these defaults: to change one, set it here. That includes
 # EARLY_STOP and REUSE: a 0 stays deployed until a later run sets it to 1 explicitly.
@@ -73,10 +74,15 @@ merged.update(json.loads(os.environ["DEPLOYED"] or "null") or {})
 for k in ("EARLY_STOP", "REUSE"):  # the engine fails at init on anything but 0 and 1
     if k in os.environ and os.environ[k].strip() not in ("0", "1"):
         sys.exit(f"{k} must be 0 or 1, not {os.environ[k]!r}")
+if "RESCALE_Q" in os.environ:  # the engine fails at init on anything else
+    modes = [m.strip() for m in os.environ["RESCALE_Q"].split(",") if m.strip()]
+    if modes != ["none"] and (not modes or len(set(modes)) != len(modes)
+                              or not set(modes) <= {"standard", "duel", "royale", "constrictor"}):
+        sys.exit(f"RESCALE_Q must be none or a list of modes, not {os.environ['RESCALE_Q']!r}")
 for k, v in os.environ.items():
     if k in (
         "SNAKES", "SNAKE_AUTHOR", "SNAKE_HEAD", "SNAKE_TAIL", "DEADLINE_MARGIN_MS", "THREADS",
-        "EARLY_STOP", "REUSE",
+        "EARLY_STOP", "REUSE", "RESCALE_Q",
     ) or k.startswith(("SNAKE_COLOR_", "SNAKE_HEAD_", "SNAKE_TAIL_")):
         merged[k] = v
 with open(sys.argv[1], "w") as f:
