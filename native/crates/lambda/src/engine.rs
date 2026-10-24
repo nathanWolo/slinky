@@ -15,6 +15,7 @@
 //! | `DEADLINE_MARGIN_MS` | time kept for the network and Lambda's overhead (see below) | 150 |
 //! | `EARLY_STOP` | `0`: always run the whole simulation count (see below) | `1` |
 //! | `REUSE` | `0`: do not keep each game's last tree for its next move (see below) | `1` |
+//! | `RESCALE_Q` | modes searched with values rescaled to the reachable range (comma list, or `none`; see below) | `standard` |
 //!
 //! Without `BUDGET_MS` the search is the faithful 256-simulation search of the Python agent
 //! (or `SIMULATIONS` of them): deterministic given the seed. With `BUDGET_MS` the number of
@@ -52,6 +53,16 @@
 //! (`THREADS=1`); the move's log line has the simulations run (`sims`) and the nodes reused
 //! (`reused`).
 //!
+//! # Rescaled values
+//!
+//! In the modes of `RESCALE_Q` the search maps each alive snake's values onto the range it can
+//! still reach (`SearchConfig::rescale_q`): once two of four snakes are dead, the 1v1 endgame is
+//! searched on a duel's scale instead of a third of it. It changes moves (unlike the
+//! speed-ups), only in 4-snake games after a death. In self-play on the proxy weights at 50 ms
+//! a move it gained +26 Elo [+9, +44] in standard, -14 [-31, +4] in royale and +1 [-15, +17]
+//! in constrictor (1000 games each), hence the default `standard`. `RESCALE_Q=none` is the
+//! search of the Python agent.
+//!
 //! # Seed policy
 //!
 //! The Python server draws the tie noise of move `i` from `fold_in(key(0), i)` with a
@@ -69,7 +80,7 @@
 //! error.
 
 use slinky_api::{PyValue, Request, game_from_request, safe_move, safe_move_json};
-use slinky_rules::Move;
+use slinky_rules::{Mode, Move};
 use slinky_search::{Agent, Budget, MoveBudget, Search, SearchError, StopReason};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
@@ -98,6 +109,8 @@ pub const MAX_GAME_TIMEOUT_MS: u64 = 60_000;
 /// request at a time, but the moves of concurrent games interleave. Each game's workspace
 /// holds its current and previous tree, so a snake holds up to `2 * GAME_TREES` trees.
 pub const GAME_TREES: usize = 4;
+/// Default `RESCALE_Q`: the modes where the rescaled values gained in self-play.
+pub const DEFAULT_RESCALE_Q: &str = "standard";
 /// Default `DEADLINE_MARGIN_MS`: the round trip between Battlesnake's engine and the Function
 /// URL, plus Lambda's own overhead per invocation.
 pub const DEFAULT_DEADLINE_MARGIN_MS: u64 = 150;
@@ -139,6 +152,8 @@ pub struct Settings {
     pub early_stop: bool,
     /// `REUSE`: keep each game's last tree and reuse its evaluations.
     pub reuse: bool,
+    /// `RESCALE_Q`: the modes searched with rescaled values (module docs).
+    pub rescale_q: Vec<Mode>,
     /// `DEBUG_PANIC=search:<game id>` or `handler:<game id>`: panic on a `/move` of that game
     /// (tests of the panic handling only; never set it in a deployment).
     pub debug_panic: Option<(String, String)>,
@@ -154,6 +169,24 @@ fn number<T: std::str::FromStr + PartialOrd + Copy + std::fmt::Display>(
         Ok(v) if v >= min && v <= max => Ok(v),
         _ => Err(format!("{what} must be {min} to {max}, not {text:?}")),
     }
+}
+
+/// A comma list of mode names (each once), or `none`.
+fn parse_modes(what: &str, text: &str) -> Result<Vec<Mode>, String> {
+    if text.trim() == "none" {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for name in text.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        let m = Mode::from_name(name).map_err(|_| {
+            format!("{what}: {name:?} is not standard, duel, royale, constrictor or none")
+        })?;
+        if out.contains(&m) {
+            return Err(format!("{what} names {name} twice"));
+        }
+        out.push(m);
+    }
+    Ok(out)
 }
 
 impl SnakeSpec {
@@ -250,6 +283,10 @@ impl Settings {
                 .map(|v| number("REUSE", &v, 0u8, 1).map(|x| x == 1))
                 .transpose()?
                 .unwrap_or(true),
+            rescale_q: parse_modes(
+                "RESCALE_Q",
+                &nonempty("RESCALE_Q").unwrap_or_else(|| DEFAULT_RESCALE_Q.to_string()),
+            )?,
             debug_panic: match nonempty("DEBUG_PANIC") {
                 None => None,
                 Some(v) => match v.split_once(':') {
@@ -383,6 +420,7 @@ impl SnakeEngine {
                     .with_memory_limit(settings.memory_limit)
                     .with_early_stop(settings.early_stop)
                     .with_reuse(settings.reuse)
+                    .with_rescale_q_modes(&settings.rescale_q)
             })
             .map_err(|e| format!("loading {}: {e}", dir.display()));
         SnakeEngine {
@@ -614,6 +652,22 @@ mod tests {
         assert_eq!(s.budget_of(&s.snakes[0]), MoveBudget::Simulations(256));
         assert_eq!(s.threads, 1);
         assert_eq!(s.memory_limit, 256 << 20);
+        assert_eq!(s.rescale_q, vec![Mode::Standard]);
+    }
+
+    #[test]
+    fn rescale_q_modes() {
+        let get = |v: &'static str| {
+            Settings::from_lookup(&lookup(Box::leak(Box::new([("RESCALE_Q", v)]))))
+                .map(|s| s.rescale_q)
+        };
+        assert_eq!(get("none"), Ok(vec![]));
+        assert_eq!(
+            get("royale, standard"),
+            Ok(vec![Mode::Royale, Mode::Standard])
+        );
+        assert!(get("standard,standard").is_err());
+        assert!(get("all").is_err());
     }
 
     #[test]
@@ -658,6 +712,7 @@ mod tests {
             &[("SNAKES", "a=m,a=n")],
             &[("SNAKES", "a=m:bogus=1")],
             &[("SNAKES", "bad/name=m")],
+            &[("RESCALE_Q", "bogus")],
         ] {
             let pairs: &'static [(&str, &str)] = Box::leak(pairs.to_vec().into_boxed_slice());
             assert!(Settings::from_lookup(&lookup(pairs)).is_err(), "{pairs:?}");

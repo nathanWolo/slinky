@@ -166,6 +166,7 @@ fn parse_settings(v: &Value) -> (SearchConfig, usize) {
         draw_value: f32_of(&v["draw"]),
         tie_noise: f32_of(&v["tie_noise"]),
         max_depth: u(&v["max_depth"]) as usize,
+        rescale_q: false,
     };
     (cfg, u(&v["sims"]) as usize)
 }

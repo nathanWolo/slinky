@@ -21,7 +21,7 @@ Usage:
 Agents (SPEC):
   random_legal
   az_modes:<run dir>[:simulations=N | :time_ms=T[:max_simulations=N]][:threads=K][:memory_mb=M]
-                [:early_stop=1][:reuse=1][:int8=1]
+                [:early_stop=1][:reuse=1][:int8=1][:rescale_q=1]
   <run dir>                              (= az_modes:<run dir>:simulations=256)
 
 Options:
