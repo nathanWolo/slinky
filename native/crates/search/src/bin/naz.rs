@@ -5,7 +5,8 @@
 //! says why on stderr.
 //!
 //! ```text
-//! naz --run DIR [--sims N] [--seed S] [--starting N] [--time-ms T] [--threads K] [-v] < move.json
+//! naz --run DIR [--sims N] [--seed S] [--starting N] [--time-ms T] [--threads K] [--rescale-q] [-v]
+//!     < move.json
 //! ```
 //!
 //! * `--run DIR` (or env `NAZ_RUN`): the run dir with `config.json` and `params.npz`.
@@ -15,9 +16,17 @@
 //! * `--starting N`: snakes at the game's start (default: the living snakes in the request).
 //! * `--time-ms T`: search until T ms after the request was read (not the faithful mode).
 //! * `--threads K`: K root-parallel trees (default 1, the plain search).
+//! * `--rescale-q`: scale the search values of a standard game to the range each seat can still
+//!   reach, as the Lambda engine does by default (`RESCALE_Q=standard`,
+//!   `Agent::with_rescale_q_modes`). The other modes are searched as without it. Without the
+//!   flag the search is that of the Python agent (the Lambda's `RESCALE_Q=none`).
 //! * `-v`: print the root visits, mean values, timings and tree memory on stderr.
+//!
+//! To reproduce a Lambda move: `--seed` the `seed` of its log line, `--starting` the snakes at
+//! `/start`, and `--rescale-q` for a standard game.
 
 use slinky_api::{MoveResponse, Request, game_from_request, safe_move_json};
+use slinky_rules::Mode;
 use slinky_search::{Agent, MAX_SIMULATIONS, MoveBudget, Search};
 use std::io::Read;
 use std::process::ExitCode;
@@ -30,6 +39,7 @@ struct Args {
     seed: u32,
     starting: Option<usize>,
     time_ms: Option<u64>,
+    rescale_q: bool,
     verbose: bool,
 }
 
@@ -41,6 +51,7 @@ fn parse_args() -> Result<Args, String> {
         seed: 0,
         starting: None,
         time_ms: None,
+        rescale_q: false,
         verbose: false,
     };
     let mut it = std::env::args().skip(1);
@@ -79,10 +90,11 @@ fn parse_args() -> Result<Args, String> {
                         .map_err(|e| format!("--time-ms: {e}"))?,
                 )
             }
+            "--rescale-q" => a.rescale_q = true,
             "-v" | "--verbose" => a.verbose = true,
             "-h" | "--help" => {
                 return Err("usage: naz --run DIR [--sims N] [--seed S] [--starting N] \
-                            [--time-ms T] [--threads K] [-v] < move.json"
+                            [--time-ms T] [--threads K] [--rescale-q] [-v] < move.json"
                     .into());
             }
             other => return Err(format!("unknown argument {other}")),
@@ -117,7 +129,15 @@ fn main() -> ExitCode {
     };
     let t_load = Instant::now();
     let agent = match Agent::load(&run) {
-        Ok(a) => a.with_budget(budget).with_threads(args.threads),
+        Ok(a) => a
+            .with_budget(budget)
+            .with_threads(args.threads)
+            // The Lambda engine's default RESCALE_Q=standard.
+            .with_rescale_q_modes(if args.rescale_q {
+                &[Mode::Standard]
+            } else {
+                &[]
+            }),
         Err(e) => {
             eprintln!("naz: {e}");
             return ExitCode::from(1);
@@ -148,14 +168,16 @@ fn main() -> ExitCode {
     if let (true, Ok(m)) = (args.verbose, &result) {
         let s = &m.search;
         eprintln!(
-            "mode {} ({} seats), {} simulations, {} nodes, depth {}, search {:.1} ms, load {:.1} ms",
+            "mode {} ({} seats), {} simulations, {} nodes, depth {}, search {:.1} ms, load {:.1} ms, \
+             rescale_q {}",
             m.mode.name(),
             m.num_snakes,
             s.simulations,
             s.nodes_used,
             s.depth,
             m.elapsed.as_secs_f64() * 1e3,
-            load.as_secs_f64() * 1e3
+            load.as_secs_f64() * 1e3,
+            if agent.rescale_q(m.mode) { "on" } else { "off" }
         );
         let (mut alloc, mut tree) = (0, 0);
         for ws in &workspaces {

@@ -232,8 +232,9 @@ impl Agent {
     }
 
     /// The same agent scaling each seat's values to the range it can still reach
-    /// ([`SearchConfig::rescale_q`]; changes the moves of 4-seat games once a snake is dead) in
-    /// every mode (`on`) or none. Off by default.
+    /// ([`SearchConfig::rescale_q`]) in every mode (`on`) or none. Off by default. It changes
+    /// a search wherever its tree reaches a node with 1 to `n - 2` of `n` snakes dead, also
+    /// when every snake is alive at the root, and in 3-snake games (`q_scale`).
     pub fn with_rescale_q(mut self, on: bool) -> Agent {
         self.rescale_q = [on; 4];
         self

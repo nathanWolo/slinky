@@ -10,8 +10,9 @@
 //!   `max_simulations`. `threads=K` uses K root-parallel trees (not recommended).
 //!   `early_stop=1` and `reuse=1` turn on the deployed engine's two speed-ups that keep the
 //!   moves; `int8=1` runs the network in int8 (`Network::quantize_int8`; changes the outputs);
-//!   `rescale_q=1` scales the search values to the range each seat can still reach
-//!   (`Agent::with_rescale_q`; changes 4-snake moves once a snake is dead).
+//!   `rescale_q=1` scales the search values to the range each seat can still reach, in every
+//!   mode (`Agent::with_rescale_q`; changes moves in games of 3 or more snakes wherever the
+//!   tree reaches a node with 1 to n - 2 of n snakes dead).
 
 use std::hash::Hasher;
 use std::path::{Path, PathBuf};

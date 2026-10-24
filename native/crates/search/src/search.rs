@@ -149,7 +149,8 @@ pub struct SearchConfig {
     /// Depth limit of a descent before `min(max_depth, simulations)` (32).
     pub max_depth: usize,
     /// Map each alive seat's `q` onto `[0, 1]` over the values still reachable at the node
-    /// instead of over `[-1, 1]` (off in the deployed runs; see `q_scale`).
+    /// instead of over `[-1, 1]` (off by default; the Lambda engine turns it on for standard
+    /// games, `RESCALE_Q`; see `q_scale`).
     pub rescale_q: bool,
 }
 
@@ -299,8 +300,13 @@ impl Node {
 /// anywhere among the `k` alive ones, so its placement value lies in
 /// `[(d - (k - 1)) / (N - 1), 1]` (a drawn finish included). In a 4-seat game with two seats
 /// dead that is `[1/3, 1]`: the 1v1 endgame is searched on the scale of a duel, where the fixed
-/// scale squeezes its stakes into a third of the range and lets the priors dominate. With nobody
-/// dead (every duel, and a 4-seat game before the first death) both give the same map.
+/// scale squeezes its stakes into a third of the range and lets the priors dominate (a 3-seat
+/// game with one dead: `[0, 1]`).
+///
+/// The map comes from each node's own state, `n` seats of which `k` are alive. It is the default
+/// map for `n <= 2` (every duel), for `k == n` (nobody dead) and for `k == 1`; every other node
+/// (`2 <= k < n`) is rescaled. So a search changes wherever its tree reaches a node with 1 to
+/// `n - 2` seats dead, also when every snake is alive at the root, and in 3-seat games.
 #[inline]
 fn q_scale(state: &GameState, n: usize, rescale_q: bool) -> (f32, f32) {
     if rescale_q && n > 2 {

@@ -7,8 +7,9 @@ where the JAX stack is too heavy.
 
 This is a faithful port. Given the same position, the same weights and the same random key, it
 runs the same 256-simulation decoupled-PUCT search as `slinky.mcts.search` and plays the same
-move. A time-budget search (`Budget::until`) exists but is not the default and has no parity
-claim.
+move (the `Agent` default; the Lambda rescales the values of standard games by default,
+`RESCALE_Q`, and then is no longer the Python search). A time-budget search (`Budget::until`)
+exists but is not the default and has no parity claim.
 
 The porting spec, with `file:line` references into the Python, is
 `/home/nathan/rocdxg-work/native-az/SPEC.md`. Each crate's module docs name the Python
@@ -47,6 +48,7 @@ Play one move from the command line:
 $CARGO_TARGET_DIR/release/naz --run /home/nathan/slinky-serve/az-modes-M-s0 -v < move.json
 # options: --sims N (default 256)  --seed S (tie noise of jax.random.key(S))
 #          --starting N (snakes at /start)  --time-ms T (stop early; not the faithful mode)
+#          --rescale-q (scale a standard game's search values: the Lambda's default RESCALE_Q=standard)
 ```
 
 From Rust:
@@ -118,7 +120,7 @@ The two rows below that run the Rust network were re-measured on the structured 
 | search: real agent with Python's network outputs replayed | 2,300 searches | bit-exact |
 | search: adversarial (crafted, random play, other constants) | 680 + 840 + 340 searches | bit-exact, root priors included |
 | search: real agent with the Rust network, 256 simulations | 2,300 positions (golden seeds) | move agrees 100%. Visits equal for seat 0 in 99.91% of positions and for all seats in 99.87%. **Re-measured on the structured path (2026-10-18): moves 2,300/2,300, seat-0 visits equal 99.87% (3 differ, against 2 on the dense path), all seats 99.83%** |
-| agent end to end (`Agent::play` on API requests) | 210 golden requests + 466 ladder-shaped requests | move agrees 100%, seat-0 visits equal 100%. **Re-measured on the structured path (2026-10-18): e2e 210/210; Lambda engine against Python, 461/461 ladder-shaped requests** |
+| agent end to end (`Agent::play` on API requests) | 210 golden requests + 466 ladder-shaped requests | move agrees 100%, seat-0 visits equal 100%. **Re-measured on the structured path (2026-10-18): e2e 210/210; Lambda engine against Python, 461/461 ladder-shaped requests (since 2026-10-23 with `RESCALE_Q=none`)** |
 
 ### Fresh positions (new seeds, not used during development)
 
@@ -192,8 +194,9 @@ Agents:
   time-budget search early when the reuse is on) and `:int8=1` (the int8 network,
   `Network::quantize_int8`: off in every serving path, changes the outputs, strength
   untested) and `:rescale_q=1` (search values scaled to the range each seat can still
-  reach, `Agent::with_rescale_q`: off in every serving path, changes 4-snake moves once a
-  snake is dead). A bare run dir also works.
+  reach, `Agent::with_rescale_q`, in every mode: off by default; the Lambda turns it on for
+  standard games. It changes moves in games of 3 or more snakes wherever the tree reaches a
+  node with 1 to n - 2 of n snakes dead). A bare run dir also works.
 
 Options:
 
