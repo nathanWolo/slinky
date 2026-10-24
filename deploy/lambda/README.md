@@ -7,11 +7,11 @@ snake:
   plain NumPy (`snake_numpy.py`). Each plays the 11×11 duel. `tests/test_snake_numpy.py`
   checks the port against the JAX agents.
 - the native AlphaZero snake `az-256`: the multi-mode az_modes M network with its 256-simulation
-  search (the ladder agent, all four ladder modes: standard, duel, royale, constrictor), played
-  by the Rust engine `bin/slinky-engine` (`native/crates/lambda`, `src/bin/engine.rs`). The
-  handler starts the engine once per container, on first use (usually the game's `/start`), and
-  talks to it in JSON lines. `tests/test_lambda_native.py` checks the handler with a local
-  build of the engine.
+  search (the ladder agent's search, in standard games only with `RESCALE_Q=none`, see below;
+  all four ladder modes: standard, duel, royale, constrictor), played by the Rust engine
+  `bin/slinky-engine` (`native/crates/lambda`, `src/bin/engine.rs`). The handler starts the
+  engine once per container, on first use (usually the game's `/start`), and talks to it in JSON
+  lines. `tests/test_lambda_native.py` checks the handler with a local build of the engine.
 
 Files:
 
@@ -58,8 +58,19 @@ to match this directory's `lambda_function.py`. After that, the same command wit
 `dist/snake.zip` switches them off (or, with `=1`, on again) without a rebuild. The rebuild also
 brings the structured first layer, which has no switch: its outputs differ from the dense path's
 by typically ~2e-7 and at most a few 1e-6, so it can flip a rare near-tie (the 461 Python-golden
-requests still agree). As of 2026-10-18 the deployed `slinky-snake` still runs the older engine.
-The native function `slinky-native` has the same switch: `deploy/lambda-native/README.md`.
+requests still agree, with the rescale below off). As of 2026-10-18 the deployed `slinky-snake`
+still runs the older engine. The native function `slinky-native` has the same switch for those
+two: `deploy/lambda-native/README.md`.
+
+That rebuild also changes standard moves, and this function cannot switch that off. A
+`bin/slinky-engine` built from 3bec1de or later (216a5ed added the search option, off by default)
+rescales the values of standard games by default (engine `RESCALE_Q=standard`, see
+`native/crates/lambda/README.md`, Rescaled values). `Engine.env` in `lambda_function.py` does not
+copy `RESCALE_Q` to the engine, so this function's `/az-256` is the Python agent's search in
+standard games only with an engine built from before 3bec1de. On the 461 Python goldens the
+rescale changes the move of 2 of the 89 standard requests (and the root visits of 37 of them). The
+setting covers every snake of the engine process; there is no per-snake option. `slinky-native`
+(`deploy/lambda-native/README.md`, Rescaled endgame values) has `RESCALE_Q` as a deploy-time switch.
 
 ```bash
 deploy/lambda/build.sh                          # or build.sh <python with pip and numpy>
