@@ -29,6 +29,8 @@
 //!   reach), and the engine skips it when the reuse is on, so these simulations are what speed
 //!   buys.
 //!
+//! Its searches use `SearchConfig::from_net`: `RESCALE_Q` does not apply, the rescale is off.
+//!
 //! It stops early, with what it has, 300 ms before the invocation's deadline: give the
 //! function a longer timeout for the run (about 50 s on the dev box's Xeon with the defaults;
 //! give the Lambda 120 s).

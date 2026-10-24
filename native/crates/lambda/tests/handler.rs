@@ -6,6 +6,8 @@
 //!   `$NAZ_GOLDEN`, default `/dev/shm/naz-golden`) through `/start` + `/move` with `TIE_SEED`
 //!   set to the golden seed and `RESCALE_Q=none` (the Python search): the move must equal the
 //!   Python agent's;
+//! * `RESCALE_Q` reaching the search (a 1v1 endgame where the rescaled and the plain search play
+//!   different moves);
 //! * routing, error and fallback behaviour; a time budget.
 //!
 //! The run dir is `$NAZ_RUN` (default: the deployed M network). Without it the tests print SKIP.
@@ -183,39 +185,62 @@ fn unplayable_games_get_the_safe_move() {
     assert!(v["move"].is_string());
 }
 
+/// `RESCALE_Q` reaches the search. In the 1v1 endgame below, a 4-snake standard game with the
+/// first and last seats gone, the rescaled search plays another move than the plain one for each
+/// of five tie seeds, so a handler whose setting never reached the search (the default playing
+/// the plain move, or `RESCALE_Q=none` the rescaled one) fails here. If the weights change and
+/// the two searches agree on a turn, pick turns where they differ (the assert says which).
 #[test]
-fn rescale_q_applies_to_standard_after_a_death() {
+fn rescale_q_reaches_the_search() {
     let Some(run) = run_dir() else { return };
     let ex = examples();
     let start = &ex["requests"]["standard"];
-    // The same game two turns on, with two of its four snakes gone: a 1v1 endgame.
-    let mut endgame = start.clone();
-    endgame["turn"] = json!(2);
-    let snakes = endgame["board"]["snakes"].as_array().unwrap()[..2].to_vec();
-    if !snakes.iter().any(|s| s["id"] == endgame["you"]["id"]) {
-        endgame["you"] = snakes[0].clone();
-    }
-    endgame["board"]["snakes"] = json!(snakes);
-    let id = endgame["game"]["id"].as_str().unwrap().to_string();
-    let seed = tie_seed(&id, "2");
     let plain = Agent::load(&run).unwrap();
-    let off = plain.play(&endgame.to_string(), Some(4), seed).unwrap();
-    let on = Agent::load(&run)
+    let rescaled = Agent::load(&run)
         .unwrap()
-        .with_rescale_q_modes(&[Mode::Standard])
-        .play(&endgame.to_string(), Some(4), seed)
-        .unwrap();
-    assert_ne!(
-        on.search.visits, off.search.visits,
-        "rescaling changes the search"
-    );
-    for (env, want) in [(None, &on), (Some("none"), &off)] {
-        let extra: Vec<(&str, &str)> = env.map(|v| ("RESCALE_Q", v)).into_iter().collect();
-        let a = app(&run, &extra);
-        assert_eq!(call(&a, "POST", "/m/start", start).0, 200);
-        let (c, v) = call(&a, "POST", "/m/move", &endgame);
-        assert_eq!(c, 200);
-        assert_eq!(v["move"], want.mv.name(), "RESCALE_Q={env:?}");
+        .with_rescale_q_modes(&[Mode::Standard]);
+    // The engine's default, `none`, and a list without `standard`: the first plays the rescaled
+    // search, the others the plain one.
+    let apps: Vec<(Option<&str>, bool, App)> = [None, Some("none"), Some("royale, duel")]
+        .into_iter()
+        .map(|env| {
+            let extra: Vec<(&str, &str)> = env.map(|v| ("RESCALE_Q", v)).into_iter().collect();
+            let a = app(&run, &extra);
+            assert_eq!(call(&a, "POST", "/m/start", start).0, 200);
+            (env, env.is_none(), a)
+        })
+        .collect();
+    for turn in 7u64..=11 {
+        let mut endgame = start.clone();
+        endgame["turn"] = json!(turn);
+        let snakes = endgame["board"]["snakes"].as_array().unwrap()[1..3].to_vec();
+        endgame["you"] = snakes[0].clone();
+        endgame["board"]["snakes"] = json!(snakes);
+        let id = endgame["game"]["id"].as_str().unwrap().to_string();
+        let seed = tie_seed(&id, &turn.to_string());
+        let body = endgame.to_string();
+        let off = plain.play(&body, Some(4), seed).unwrap();
+        let on = rescaled.play(&body, Some(4), seed).unwrap();
+        assert_ne!(
+            on.search.visits, off.search.visits,
+            "turn {turn}: rescaling changes the search"
+        );
+        assert_ne!(
+            on.mv, off.mv,
+            "turn {turn}: the rescaled and the plain search play the same move here, so the \
+             test cannot tell whether RESCALE_Q reaches the search; pick another position"
+        );
+        for (env, rescaled_expected, a) in &apps {
+            let (c, v) = call(a, "POST", "/m/move", &endgame);
+            assert_eq!(c, 200);
+            let want = if *rescaled_expected { &on } else { &off };
+            assert_eq!(v["move"], want.mv.name(), "turn {turn}, RESCALE_Q={env:?}");
+        }
+        eprintln!(
+            "rescale_q turn {turn}: seed {seed}, default and agent {}, RESCALE_Q=none {}",
+            on.mv.name(),
+            off.mv.name()
+        );
     }
 }
 

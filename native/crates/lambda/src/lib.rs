@@ -127,6 +127,9 @@ impl App {
                     "event": "load", "snake": spec.name, "ok": e.load_error().is_none(),
                     "error": e.load_error(), "budget": format!("{:?}", settings.budget_of(spec)),
                     "threads": settings.threads,
+                    // What this snake does, as the loaded agent has it (empty rescale_q: none).
+                    "early_stop": e.early_stop(), "reuse": e.reuse(),
+                    "rescale_q": e.rescale_q_modes(),
                     "ms": (t.elapsed().as_secs_f64() * 1e5).round() / 100.0,
                 }));
                 e

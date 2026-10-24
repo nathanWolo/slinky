@@ -22,8 +22,10 @@ the Python deployment behind one Function URL:
     POST /<snake>/end      logged
 
 The engine is `slinky_search::Agent`: the weights are read once per container (at init, 1.6 ms for
-the M network), each move is the faithful decoupled-PUCT search of the Python agent
-(`az_modes:<run>:simulations=256`) unless the settings below ask for more. Layout: `src/engine.rs`
+the M network), each move is the decoupled-PUCT search of the Python agent
+(`az_modes:<run>:simulations=256`) with the standard-game rescale of `RESCALE_Q`, which is the
+Python search exactly only with `RESCALE_Q=none` (see Rescaled values), unless the settings below
+ask for more. Layout: `src/engine.rs`
 (settings, seed policy, search and fallback), `src/lib.rs` (routing, `/start` cache, logs),
 `src/main.rs` (Lambda glue), `tests/handler.rs`.
 
@@ -40,14 +42,17 @@ the M network), each move is the faithful decoupled-PUCT search of the Python ag
 | `MEMORY_LIMIT_MB` | cap on one search tree (the search stops early when it is reached). With `REUSE` a snake holds up to 8 trees (2 x `GAME_TREES`: the current and the previous tree of each of 4 games), see Memory | 256 |
 | `EARLY_STOP` | `0`: always run the whole simulation count; `1`: stop once the leading move cannot be overtaken by the simulations left (the move is the same). A `BUDGET_MS` snake stops early only with `REUSE=0`, see Early stop and reuse | `1` |
 | `REUSE` | `0`: forget each search; `1`: keep each game's last tree (the 4 most recent games) and reuse its network evaluations (bit-identical moves) | `1` |
-| `RESCALE_Q` | modes (comma list of `standard`, `duel`, `royale`, `constrictor`, or `none`) whose search rescales each snake's values to the range it can still reach; changes moves, see Rescaled values | `standard` |
+| `RESCALE_Q` | modes (comma list of `standard`, `duel`, `royale`, `constrictor`, or `none`) whose search rescales each snake's values to the range it can still reach; for every snake; changes moves, see Rescaled values | `standard` |
 | `DEADLINE_MARGIN_MS` | time kept for the network and Lambda's overhead: every search stops at `game.timeout` less this (see Deadline) | 150 |
 | `DEBUG_PANIC` | `search:<game id>` or `handler:<game id>`: panic on that game's `/move` (tests only) | off |
 | `SNAKE_AUTHOR`, `SNAKE_HEAD`, `SNAKE_TAIL`, `SNAKE_COLOR_<NAME>` | info response (`<NAME>` upper case, `-` and `.` become `_`) | `slinky`, `default`, `default`, `#8b5cf6` |
 
 A malformed setting (`SIMULATIONS=0`, a bad `SNAKES` item, two snakes with one name) makes the
 function fail at init with a message, which shows in the first invocation's error. A snake whose
-weights cannot be loaded keeps answering with the safe move and logs why (event `load`).
+weights cannot be loaded keeps answering with the safe move and logs why (event `load`). Each snake's
+`load` line also says what is live for it: `early_stop` and `reuse` (true or false, after `THREADS`
+and `BUDGET_MS` are taken into account, see Early stop and reuse) and `rescale_q`, the list of modes
+searched with rescaled values (`[]` for `none`).
 
 ### Deadline
 
@@ -90,12 +95,28 @@ In the modes of `RESCALE_Q` (default `standard`) the search maps each alive snak
 the range it can still reach instead of the whole game's `[-1, 1]` (`SearchConfig::rescale_q`):
 once two of four snakes are dead, both survivors have already outlasted two, so the 1v1
 endgame's outcomes span `[1/3, 1]`, and on the fixed scale the PUCT priors outweigh those values
-three times as much as in a duel. Unlike the speed-ups this changes moves, in 4-snake games
-after the first death only (a duel is the same either way). On arena the snake converted 43% of
-its standard 1v1 endgames against 73-78% for the top minimax snakes (2026-10-16 to 10-23). In
-self-play on the proxy weights at 50 ms a move, rescaled against plain, 1000 games a mode: standard
-+26 Elo [+9, +44] (win share 36.9% against a parity of 25%), royale -14 [-31, +4], constrictor
-+1 [-15, +17]; hence standard only. `RESCALE_Q=none` is the Python agent's search.
+three times as much as in a duel.
+
+Which moves change. The range comes from each tree node's own state, so a standard game of `n`
+snakes is searched differently wherever its tree reaches a node with 1 to `n - 2` snakes dead,
+also while all snakes are alive, and in 3-snake games. A node with nobody dead, one with a single
+snake alive, and every node of a duel (`n <= 2`) keep the default map. Duel, royale and
+constrictor are unchanged unless `RESCALE_Q` names them. The setting is global: `/az-256` and
+`/az-t200` both get it, so `/az-256` is the Python agent's search only with `RESCALE_Q=none`.
+On the 461 golden ladder requests (89 of them standard, 256 simulations, the golden seeds) it
+changes the root visits of 37, 10 of them with every snake alive, and the move of 2.
+
+`n` is the larger of the snake count `/start` left in this container's cache and the snakes
+listed in the request. A container that missed the game's `/start` searches a 4-snake game with
+2 left as a duel (no rescale) and one with 3 left with `n = 3`. The `{"bench"}` direct invocation
+runs with the rescale off.
+
+Evidence: on arena the snake converted 43% of its standard 1v1 endgames against 73-78% for the
+top minimax snakes (2026-10-16 to 10-23). In self-play on the proxy weights at 50 ms a move,
+rescaled against plain, 1000 games a mode: standard +26 Elo [+9, +44] (win share 36.9% against
+a parity of 25%), royale -14 [-31, +4], constrictor +1 [-15, +17]; hence standard only. That test
+did not use the deployed weights or budgets (256 simulations, 200 ms) and played 4-snake games;
+a test on the deployed weights is in progress (2026-10-23).
 
 ### Memory
 
@@ -114,7 +135,8 @@ make the answer depend on the container. Instead the seed is a fixed hash of the
 `engine::tie_seed`). The same request always gets the same move (a retry cannot flip a near-tie),
 different games and turns draw different noise, and all containers agree. The noise is that of
 `jax.random.key(seed)`, so `naz --seed <seed>` reproduces a Lambda move exactly (the seed is in
-each move's log line). `TIE_SEED` overrides it.
+each move's log line; add `--starting N` for the snake count at `/start`, and `--rescale-q` for a
+standard game, the default `RESCALE_Q`). `TIE_SEED` overrides it.
 
 ### Fallback
 
@@ -186,10 +208,13 @@ the vectors in `$NAZ_GOLDEN`, both SKIP when missing) checks, through the same `
 Lambda calls:
 
 * the four modes' example requests (`/start`, `/move`, `/end`) against `Agent::play` with the
-  documented seed and 256 simulations;
+  documented seed and 256 simulations (the engine's default `RESCALE_Q`);
 * 461 ladder-shaped requests (4 modes, 2 to 4 snakes, with and without `/start` count) from the
-  Python goldens (`review_ladder.jsonl`) with `TIE_SEED` set to the golden seed: all 461 moves equal
-  the Python agent's (also with the x86-64-v3 build);
+  Python goldens (`review_ladder.jsonl`) with `TIE_SEED` set to the golden seed and
+  `RESCALE_Q=none`: all 461 moves equal the Python agent's (also with the x86-64-v3 build);
+* `RESCALE_Q` reaching the search: in a 1v1 endgame of a 4-snake standard game where the
+  rescaled and the plain search play different moves, the default plays the rescaled move and
+  `RESCALE_Q=none` (or a list without `standard`) the plain one;
 * routing, 400s, lone snake and 9x9 board answering the safe move, missing weights, `SIMULATIONS=1024`
   against the agent with 1024 simulations, `BUDGET_MS=60` answering within 120 ms, `THREADS=2`.
 
@@ -203,7 +228,9 @@ Local server (builds for the host; a first call compiles, so wait for it):
 Checked this way: real `/start`, `/move`, `/end` for standard, duel, royale and constrictor; the
 four example moves equal `naz --starting N --seed S` with the seed from the log line; and 40
 random ladder requests (17 duel, 11 standard, 7 royale, 5 constrictor) through HTTP equal the
-`naz` CLI move for the logged seed (40/40).
+`naz` CLI move for the logged seed (40/40). That was before `RESCALE_Q`: a standard game now needs
+`naz --rescale-q` (`slinky-search`'s `tests/naz_cli.rs` checks that its move and root visits are
+those of the engine's agent).
 
 ## Measurements
 
@@ -294,5 +321,6 @@ name e.g. `slinky-snake-native` (separate from `slinky-snake`), `--memory-size 1
 `SNAKES=az-1024=az-modes:simulations=1024`, or `BUDGET_MS=300` with `THREADS` equal to the vCPUs.
 Alternatively `cargo lambda deploy slinky-lambda --binary-name slinky-lambda --enable-function-url`
 with the same profile. After deploying, send the example requests through the Function URL and
-compare the moves with `naz --seed` for the seeds in the CloudWatch log lines (one JSON line per
+compare the moves with `naz --seed` (plus `--starting N`, and `--rescale-q` for a standard game
+unless `RESCALE_Q=none`) for the seeds in the CloudWatch log lines (one JSON line per
 event: `by`, `sims`, `mode`, `seed`, `ms`, `error`).

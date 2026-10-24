@@ -556,6 +556,56 @@ fn missing_weights_still_answer_moves() {
     assert_eq!(loads, 2, "{:?}", rt.logs());
 }
 
+/// Each snake's `load` log line says what is live: the modes searched with rescaled values
+/// (`RESCALE_Q`, `[]` for none), the early stop and the tree reuse, as the loaded agent has them.
+#[test]
+fn load_log_shows_the_live_settings() {
+    let Some(run) = run_dir() else { return };
+    // The `load` line of the snake `m` (256 simulations) with the settings `extra`.
+    let load_line = |extra: &[(&str, &str)]| -> Value {
+        let mut env = weights_env(&run);
+        env.extend(extra.iter().map(|(k, v)| (*k, v.to_string())));
+        let mut rt = Runtime::start(&env);
+        // Served: the init (and the load line before it) is over.
+        let (c, _, _) = rt.call("GET", "/m", "", None, false);
+        assert_eq!(c, 200);
+        thread::sleep(Duration::from_millis(200)); // let stdout drain
+        let load: Vec<Value> = rt
+            .logs()
+            .iter()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter(|v| v["event"] == "load")
+            .collect();
+        assert_eq!(load.len(), 1, "{extra:?}: {:?}", rt.logs());
+        assert_eq!(load[0]["ok"], true, "{extra:?}: {}", load[0]);
+        load[0].clone()
+    };
+    let check = |extra: &[(&str, &str)], rescale_q: Value, early_stop: bool, reuse: bool| {
+        let l = load_line(extra);
+        assert_eq!(l["rescale_q"], rescale_q, "{extra:?}: {l}");
+        assert_eq!(l["early_stop"], early_stop, "{extra:?}: {l}");
+        assert_eq!(l["reuse"], reuse, "{extra:?}: {l}");
+    };
+    // The defaults.
+    check(&[], json!(["standard"]), true, true);
+    // Everything off.
+    check(
+        &[("RESCALE_Q", "none"), ("EARLY_STOP", "0"), ("REUSE", "0")],
+        json!([]),
+        false,
+        false,
+    );
+    // Two modes, in mode order.
+    check(
+        &[("RESCALE_Q", "royale, standard")],
+        json!(["standard", "royale"]),
+        true,
+        true,
+    );
+    // Root-parallel trees: neither the early stop nor the reuse applies.
+    check(&[("THREADS", "2")], json!(["standard"]), false, false);
+}
+
 /// Bad settings fail the init: the process must exit (not hang waiting for events) and say why.
 #[test]
 fn bad_settings_fail_init() {
@@ -564,6 +614,7 @@ fn bad_settings_fail_init() {
         ("THREADS", "lots"),
         ("SNAKES", "a=m,a=n"),
         ("BUDGET_MS", "-5"),
+        ("RESCALE_Q", "none,"),
     ] {
         let mut rt = Runtime::start(&[(k, v.into())]);
         let t = Instant::now();

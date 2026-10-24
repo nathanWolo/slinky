@@ -17,9 +17,10 @@
 //! | `REUSE` | `0`: do not keep each game's last tree for its next move (see below) | `1` |
 //! | `RESCALE_Q` | modes searched with values rescaled to the reachable range (comma list, or `none`; see below) | `standard` |
 //!
-//! Without `BUDGET_MS` the search is the faithful 256-simulation search of the Python agent
-//! (or `SIMULATIONS` of them): deterministic given the seed. With `BUDGET_MS` the number of
-//! simulations depends on the machine's speed (not a parity mode).
+//! Without `BUDGET_MS` the search runs 256 simulations (or `SIMULATIONS` of them) and is
+//! deterministic given the seed. It is the search of the Python agent only with `RESCALE_Q=none`
+//! (see Rescaled values); by default standard games are rescaled, for every snake. With
+//! `BUDGET_MS` the number of simulations depends on the machine's speed (not a parity mode).
 //!
 //! # Deadline
 //!
@@ -57,11 +58,23 @@
 //!
 //! In the modes of `RESCALE_Q` the search maps each alive snake's values onto the range it can
 //! still reach (`SearchConfig::rescale_q`): once two of four snakes are dead, the 1v1 endgame is
-//! searched on a duel's scale instead of a third of it. It changes moves (unlike the
-//! speed-ups), only in 4-snake games after a death. In self-play on the proxy weights at 50 ms
-//! a move it gained +26 Elo [+9, +44] in standard, -14 [-31, +4] in royale and +1 [-15, +17]
-//! in constrictor (1000 games each), hence the default `standard`. `RESCALE_Q=none` is the
-//! search of the Python agent.
+//! searched on a duel's scale instead of a third of it. The range comes from each tree node's
+//! own state, so the search changes wherever its tree reaches a node with 1 to `n - 2` of `n`
+//! snakes dead: in a standard game of 3 or more snakes, also while all of them are alive. It is
+//! the default map for `n <= 2`, for a node with nobody dead and for one with a single snake
+//! alive. Unlike the speed-ups it changes moves. Duel, royale and constrictor are unchanged
+//! unless named. The setting is global: every snake gets it, `/az-256` too, so that snake is
+//! the Python agent's search only with `RESCALE_Q=none`. The `{"bench"}` invocation runs with
+//! it off.
+//!
+//! `n` is the larger of the snake count `/start` left in this container's cache and the snakes
+//! listed in the request. On a container that missed the game's `/start`, a 4-snake game with
+//! 2 left is searched as a duel (no rescale).
+//!
+//! In self-play on the proxy weights at 50 ms a move it gained +26 Elo [+9, +44] in standard,
+//! -14 [-31, +4] in royale and +1 [-15, +17] in constrictor (1000 games each), hence the default
+//! `standard`. It did not use the deployed weights or budgets (256 simulations, 200 ms); a test
+//! on the deployed weights is in progress.
 //!
 //! # Seed policy
 //!
@@ -71,7 +84,8 @@
 //! `tie_seed(game id, turn)`, a fixed hash (FNV-1a, 64 bit, folded to 32): the same request
 //! always gets the same move (a retry cannot flip a near-tie), different games and turns get
 //! different noise, and every container agrees. The noise is that of `jax.random.key(seed)`,
-//! so `naz --seed <tie_seed>` reproduces a Lambda move exactly.
+//! so `naz --seed <tie_seed>` reproduces a Lambda move exactly (add `--starting N` for the snake
+//! count at `/start`, and `--rescale-q` for a standard game, the default `RESCALE_Q`).
 //!
 //! # Fallback
 //!
@@ -446,6 +460,36 @@ impl SnakeEngine {
         &self.dir
     }
 
+    /// Whether a search of this snake stops once its move is decided: `EARLY_STOP`, but not
+    /// with root-parallel trees, and not for a time-budget snake that reuses trees (module
+    /// docs). False without weights.
+    pub fn early_stop(&self) -> bool {
+        match &self.agent {
+            Ok(a) => {
+                let timed = matches!(a.budget(), MoveBudget::Time { .. });
+                self.threads <= 1 && a.early_stop() && !(self.reuse && timed)
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Whether this snake keeps each game's last tree for reuse: `REUSE`, with one tree.
+    pub fn reuse(&self) -> bool {
+        self.reuse
+    }
+
+    /// The modes this snake searches with rescaled values, as the loaded agent has them
+    /// (`RESCALE_Q`): empty for `none`, and without weights.
+    pub fn rescale_q_modes(&self) -> Vec<&'static str> {
+        self.agent().map_or_else(Vec::new, |a| {
+            Mode::ALL
+                .into_iter()
+                .filter(|&m| a.rescale_q(m))
+                .map(Mode::name)
+                .collect()
+        })
+    }
+
     /// The weights' load error, if any.
     pub fn load_error(&self) -> Option<&str> {
         self.agent.as_ref().err().map(String::as_str)
@@ -504,9 +548,7 @@ impl SnakeEngine {
         let res = if self.threads <= 1 {
             // A time-budget snake that reuses trees searches a forced move to its deadline:
             // that tree is the one the next move reuses most (module docs).
-            let timed = matches!(agent.budget(), MoveBudget::Time { .. });
-            let stop_early = agent.early_stop() && !(self.reuse && timed);
-            ws[0].set_stop_when_decided(stop_early.then_some(0));
+            ws[0].set_stop_when_decided(self.early_stop().then_some(0));
             if ws[0].reuse() != self.reuse {
                 ws[0].set_reuse(self.reuse);
             }
@@ -668,6 +710,32 @@ mod tests {
         );
         assert!(get("standard,standard").is_err());
         assert!(get("all").is_err());
+    }
+
+    /// The `RESCALE_Q` texts the engine accepts (and the modes they give) and rejects, pinned
+    /// in `tests/rescale_q_cases.json`. `tests/deploy_script.rs` runs the check of `deploy.sh`
+    /// on the same table, so the two parsers cannot drift apart.
+    #[test]
+    fn rescale_q_case_table() {
+        let cases: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/rescale_q_cases.json")).unwrap();
+        let cases = cases.as_array().unwrap();
+        assert!(cases.len() >= 40);
+        for c in cases {
+            let value = c["value"].as_str().unwrap();
+            let got = Settings::from_lookup(&|k| (k == "RESCALE_Q").then(|| value.to_string()))
+                .map(|s| s.rescale_q.iter().map(|m| m.name()).collect::<Vec<_>>());
+            match c["modes"].as_array() {
+                Some(want) => {
+                    let want: Vec<&str> = want.iter().map(|m| m.as_str().unwrap()).collect();
+                    assert_eq!(got, Ok(want), "RESCALE_Q={value:?}");
+                }
+                None => {
+                    let e = got.expect_err(&format!("RESCALE_Q={value:?} must be rejected"));
+                    assert!(e.contains("RESCALE_Q"), "{e}");
+                }
+            }
+        }
     }
 
     #[test]
